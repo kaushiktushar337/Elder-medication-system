@@ -82,15 +82,33 @@ async function route(request, env) {
   if (resource === 'state' && method === 'GET') {
     await materialize(env, now, profile);
     const start = localDay(now);
-    const [person, medications, appointments, doses, contacts, deliveries] = await Promise.all([
+    const [person, medications, appointments, doses, checkins, contacts, deliveries] = await Promise.all([
       query(env, 'SELECT name, email, demo FROM profiles WHERE id = ?', profile).first(),
       rows(env, 'SELECT * FROM medications WHERE profile = ? AND active = 1 ORDER BY time', profile),
       rows(env, 'SELECT * FROM appointments WHERE profile = ? ORDER BY due', profile),
       rows(env, 'SELECT * FROM doses WHERE profile = ? AND cancelled = 0 AND due >= ? AND (demo = 1 OR due < ?) ORDER BY due', profile, start - 6 * DAY, start + DAY),
+      rows(env, 'SELECT * FROM checkins WHERE profile = ? AND (completed_at IS NULL OR completed_at >= ?) ORDER BY CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END, requested_at DESC LIMIT 20', profile, start - 6 * DAY),
       owner ? rows(env, 'SELECT c.*, m.revoked FROM contacts c LEFT JOIN members m ON m.id = c.member WHERE c.profile = ? ORDER BY c.name', profile) : [],
       owner ? rows(env, 'SELECT * FROM deliveries WHERE profile = ? ORDER BY attempted DESC LIMIT 20', profile) : []
     ]);
-    return json({ person, me: { name: member.name, owner }, medications, appointments, doses, contacts, deliveries, now, start, demoEnabled: Boolean(env.DEMO_MINUTES), demoGrace: grace(env, true) });
+    return json({ person, me: { id: member.id, name: member.name, owner }, medications, appointments, doses, checkins, contacts, deliveries, now, start, demoEnabled: Boolean(env.DEMO_MINUTES), demoGrace: grace(env, true) });
+  }
+  if (resource === 'checkins' && method === 'POST') {
+    if (!id) {
+      if (!owner) return error('Owner access required.', 403);
+      const checkin = uuid();
+      const result = await query(env, 'INSERT INTO checkins (id, profile, requested_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING', checkin, profile, now).run();
+      return result.meta.changes ? json({ id: checkin }, 201) : error('A check-in is already open.', 409);
+    }
+    if (['claim', 'complete'].includes(action)) {
+      const checkin = await query(env, 'SELECT id FROM checkins WHERE id = ? AND profile = ?', id, profile).first();
+      if (!checkin) return error('Check-in not found.', 404);
+      const update = action === 'claim'
+        ? query(env, 'UPDATE checkins SET claimed_member = ?, claimed_by = ?, claimed_at = ? WHERE id = ? AND profile = ? AND claimed_at IS NULL AND completed_at IS NULL', member.id, member.name, now, id, profile)
+        : query(env, 'UPDATE checkins SET completed_at = ? WHERE id = ? AND profile = ? AND claimed_at IS NOT NULL AND completed_at IS NULL AND (claimed_member = ? OR ? = 1)', now, id, profile, member.id, Number(owner));
+      const result = await update.run();
+      return result.meta.changes ? json({ ok: true }) : error('Another member has claimed or completed this check-in, or it still needs a caller.', 409);
+    }
   }
   if (['contacts', 'demo'].includes(resource) && !owner) return error('Owner access required.', 403);
   if (resource === 'contacts') {
@@ -187,7 +205,7 @@ async function route(request, env) {
     ]);
     return json({ id: demo, due }, 201);
   }
-  if (resource === 'doses' && id && method === 'POST' && ['taken', 'claim'].includes(action)) {
+  if (resource === 'doses' && id && method === 'POST' && ['taken', 'claim', 'complete'].includes(action)) {
     const dose = await query(env, 'SELECT * FROM doses WHERE id = ? AND profile = ? AND cancelled = 0', id, profile).first();
     if (!dose) return error('Dose not found.', 404);
     if (action === 'taken') {
@@ -195,7 +213,11 @@ async function route(request, env) {
       await query(env, 'UPDATE doses SET taken_at = ?, taken_by = ? WHERE id = ? AND profile = ? AND cancelled = 0 AND taken_at IS NULL', now, member.name, id, profile).run();
       return json({ ok: true });
     }
-    const result = await query(env, 'UPDATE doses SET claimed_by = ?, claimed_at = ? WHERE id = ? AND profile = ? AND cancelled = 0 AND taken_at IS NULL AND claimed_at IS NULL AND due <= ?', member.name, now, id, profile, now - grace(env, dose.demo)).run();
+    if (action === 'complete') {
+      const result = await query(env, 'UPDATE doses SET completed_at = ? WHERE id = ? AND profile = ? AND cancelled = 0 AND claimed_at IS NOT NULL AND completed_at IS NULL AND (claimed_member = ? OR ? = 1)', now, id, profile, member.id, Number(owner)).run();
+      return result.meta.changes ? json({ ok: true }) : error('This follow-up must be claimed, and only the caller or profile owner can complete it.', 409);
+    }
+    const result = await query(env, 'UPDATE doses SET claimed_member = ?, claimed_by = ?, claimed_at = ? WHERE id = ? AND profile = ? AND cancelled = 0 AND taken_at IS NULL AND claimed_at IS NULL AND due <= ?', member.id, member.name, now, id, profile, now - grace(env, dose.demo)).run();
     return result.meta.changes ? json({ ok: true }) : error('This follow-up is already claimed, confirmed, or still in its grace period.', 409);
   }
   return error('Page not found.', 404);

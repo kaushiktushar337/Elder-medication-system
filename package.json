@@ -7,6 +7,7 @@
   },
   "scripts": {
     "dev": "node --env-file-if-exists=.env scripts/server.mjs",
+    "db:check": "node --env-file-if-exists=.env scripts/check-database.mjs",
     "start": "node scripts/server.mjs",
     "test": "node --test"
   },

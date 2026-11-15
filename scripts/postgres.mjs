@@ -1,5 +1,5 @@
-import { readFile } from 'node:fs/promises';
 import pg from 'pg';
+import { migrations } from './migrations.mjs';
 
 const bigIntOid = 20;
 const queryTypes = {
@@ -8,18 +8,38 @@ const queryTypes = {
   }
 };
 
-export async function postgres(connectionString, ca) {
+function createPool(connectionString, ca, tlsMode = 'verify-full') {
+  if (!['verify-full', 'require'].includes(tlsMode)) {
+    throw new Error('SUPABASE_TLS_MODE must be verify-full or require.');
+  }
   const url = new URL(connectionString);
   for (const parameter of ['sslmode', 'sslcert', 'sslkey', 'sslrootcert']) url.searchParams.delete(parameter);
   const pool = new pg.Pool({
     connectionString: url.href,
-    ssl: { rejectUnauthorized: true, ...(ca ? { ca: ca.replaceAll('\\n', '\n') } : {}) },
+    ssl: {
+      rejectUnauthorized: tlsMode === 'verify-full',
+      ...(tlsMode === 'verify-full' && ca ? { ca: ca.replaceAll('\\n', '\n') } : {})
+    },
     max: 4,
     connectionTimeoutMillis: 10_000,
     types: queryTypes
   });
   pool.on('error', error => console.error('Database connection failed', error.code || error.name));
+  return pool;
+}
 
+export async function checkPostgres(connectionString, ca, tlsMode) {
+  const pool = createPool(connectionString, ca, tlsMode);
+  try {
+    const { rows: [result] } = await pool.query("SELECT to_regclass('carecircle.schema_migrations') IS NOT NULL AS initialized");
+    return result.initialized;
+  } finally {
+    await pool.end();
+  }
+}
+
+export async function postgres(connectionString, ca, tlsMode) {
+  const pool = createPool(connectionString, ca, tlsMode);
   const initialized = new WeakSet();
   async function connection(operation) {
     const client = await pool.connect();
@@ -50,17 +70,18 @@ export async function postgres(connectionString, ca) {
   });
 
   try {
-    const migration = await readFile(new URL('../migrations/0001_initial.sql', import.meta.url), 'utf8');
     await transaction(async client => {
       await client.query('SELECT pg_advisory_xact_lock(471230156)');
       await client.query('CREATE SCHEMA IF NOT EXISTS carecircle');
       await client.query('SET LOCAL search_path = carecircle');
       await client.query('REVOKE ALL ON SCHEMA carecircle FROM PUBLIC');
       await client.query('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)');
-      const existing = await client.query('SELECT 1 FROM schema_migrations WHERE version = 1');
-      if (!existing.rowCount) {
-        await client.query(migration);
-        await client.query('INSERT INTO schema_migrations VALUES (1)');
+      const { rows } = await client.query('SELECT version FROM schema_migrations');
+      const applied = new Set(rows.map(row => row.version));
+      for (const { version, sql } of migrations) {
+        if (applied.has(version)) continue;
+        await client.query(sql);
+        await client.query('INSERT INTO schema_migrations VALUES ($1)', [version]);
       }
     });
   } catch (error) {

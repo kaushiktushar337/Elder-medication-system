@@ -16,6 +16,7 @@ export async function materialize(env, now, profile = null) {
 const titles = {
   upcoming: 'A medication reminder is coming up',
   unconfirmed: 'A care check-in may be needed',
+  checkin: 'Someone in your care circle asked for a check-in',
   appointment: 'An appointment is coming up'
 };
 
@@ -42,7 +43,7 @@ async function deliver(env, message) {
 async function recipients(env, profile, kind) {
   const person = await query(env, 'SELECT email FROM profiles WHERE id = ?', profile).first();
   const contacts = kind === 'upcoming' ? [] : await rows(env, 'SELECT email, phone FROM contacts WHERE profile = ? AND alerts = 1', profile);
-  const email = new Set([person.email, ...contacts.map(contact => contact.email)].filter(Boolean));
+  const email = new Set([kind === 'checkin' ? '' : person.email, ...contacts.map(contact => contact.email)].filter(Boolean));
   const sms = env.BREVO_SMS_SENDER && new Set(contacts.map(contact => contact.phone).filter(Boolean));
   return [...Array.from(email, to => ({ to, channel: 'email' })), ...(sms ? Array.from(sms, to => ({ to, channel: 'sms' })) : [])];
 }
@@ -52,7 +53,9 @@ export async function remind(env, now = Date.now(), send = message => deliver(en
   await query(env, "UPDATE deliveries SET state = 'review' WHERE state = 'sending' AND attempted <= ?", now - 5 * MINUTE).run();
   const doses = await rows(env, 'SELECT id, profile, due, demo FROM doses WHERE cancelled = 0 AND taken_at IS NULL AND due BETWEEN ? AND ? ORDER BY due', now - 120 * MINUTE, now + 15 * MINUTE);
   const appointments = await rows(env, 'SELECT id, profile, due FROM appointments WHERE due > ? AND due <= ? ORDER BY due', now, now + DAY);
+  const checkins = await rows(env, 'SELECT id, profile FROM checkins WHERE claimed_at IS NULL AND completed_at IS NULL AND requested_at BETWEEN ? AND ?', now - 60 * MINUTE, now);
   const events = [
+    ...checkins.map(checkin => ({ ...checkin, kind: 'checkin' })),
     ...doses.filter(dose => dose.due > now).map(dose => ({ ...dose, kind: 'upcoming' })),
     ...doses.filter(dose => now >= dose.due + grace(env, dose.demo) && now < dose.due + grace(env, dose.demo) + 60 * MINUTE).map(dose => ({ ...dose, kind: 'unconfirmed' })),
     ...appointments.map(appointment => ({ ...appointment, kind: 'appointment' }))
@@ -69,12 +72,15 @@ export async function remind(env, now = Date.now(), send = message => deliver(en
       if (!reserved) continue;
       const current = event.kind === 'appointment'
         ? await query(env, 'SELECT 1 FROM appointments WHERE id = ? AND due = ?', event.id, event.due).first()
-        : await query(env, 'SELECT 1 FROM doses WHERE id = ? AND cancelled = 0 AND taken_at IS NULL', event.id).first();
+        : event.kind === 'checkin'
+          ? await query(env, 'SELECT 1 FROM checkins WHERE id = ? AND claimed_at IS NULL AND completed_at IS NULL', event.id).first()
+          : await query(env, 'SELECT 1 FROM doses WHERE id = ? AND cancelled = 0 AND taken_at IS NULL', event.id).first();
       const active = current && (await recipients(env, event.profile, event.kind)).some(candidate => candidate.channel === recipient.channel && candidate.to === recipient.to);
       let state = 'suppressed';
       if (active) {
         try { ({ state } = await send({ ...recipient, kind: event.kind })); } catch { state = 'review'; }
       }
+      if (state === 'retry' && reserved.attempts >= 3) state = 'failed';
       await query(env, 'UPDATE deliveries SET state = ? WHERE event = ? AND kind = ? AND recipient = ? AND channel = ? AND state = ? AND attempted = ?', state, ...keys, 'sending', now).run();
     }
   }

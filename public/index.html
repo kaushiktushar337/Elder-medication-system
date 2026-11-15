@@ -3,12 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f7f8f2">
+  <meta name="theme-color" content="#f5f7f4">
   <title>CareCircle | Daily care</title>
   <link rel="stylesheet" href="/styles.css">
   <script type="module" src="/app.js"></script>
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to main content</a>
   <header class="topbar">
     <div class="topbar-inner">
       <a class="brand" href="/" aria-label="CareCircle home"><span class="brand-icon" aria-hidden="true">✚</span> CareCircle</a>
@@ -20,18 +21,17 @@
       <button id="logout" class="quiet" hidden>Sign out</button>
     </div>
   </header>
-  <main>
+  <main id="main" tabindex="-1">
     <div id="notice" role="status" aria-live="polite"></div>
     <section id="auth" class="auth-layout" hidden>
       <div class="auth-intro">
-        <span class="brand-icon large" aria-hidden="true">✚</span>
         <h1>Daily care, together.</h1>
-        <p>See what’s due today, keep track of appointments, and ask your care circle to check in when a dose goes unconfirmed.</p>
+        <p>See today’s doses and appointments, and let someone in your care circle know when a check-in may help.</p>
       </div>
       <div class="card auth-card">
         <form id="login-form">
           <h2>Sign in</h2>
-          <label>Personal passcode<input name="passcode" required autocomplete="current-password" spellcheck="false"></label>
+          <label>Personal passcode<input name="passcode" type="password" required autocomplete="current-password" autocapitalize="none" spellcheck="false"></label>
           <button class="primary">Open care profile</button>
         </form>
         <details>
@@ -54,21 +54,33 @@
         <div id="alarm" class="alarm" role="alert" hidden></div>
         <div class="today-grid">
           <section class="card featured" aria-labelledby="next-heading">
-            <div class="section-icon" aria-hidden="true">◷</div>
-            <h2 id="next-heading">Next dose</h2><div id="next-dose"></div>
+            <h2 id="next-heading">Next dose</h2>
+            <div id="next-dose"></div>
           </section>
           <section class="card appointment" aria-labelledby="appointment-heading">
-            <div class="section-icon" aria-hidden="true">▦</div>
-            <h2 id="appointment-heading">Next appointment</h2><div id="next-appointment"></div>
+            <h2 id="appointment-heading">Next appointment</h2>
+            <div id="next-appointment"></div>
           </section>
           <section class="card dose-card" aria-labelledby="doses-heading">
-            <h2 id="doses-heading">Today’s doses</h2><div id="today-doses"></div>
+            <h2 id="doses-heading">Today’s doses</h2>
+            <div id="dose-progress" class="dose-progress" hidden>
+              <label for="dose-meter" id="dose-count"></label>
+              <progress id="dose-meter" max="1" value="0"></progress>
+            </div>
+            <div id="today-doses"></div>
           </section>
           <section class="card followup-card" aria-labelledby="followup-heading">
-            <h2 id="followup-heading">Care follow-ups</h2><div id="followups"></div>
+            <h2 id="followup-heading">Care follow-ups</h2>
+            <button id="request-checkin" class="primary" data-action="request-checkin" hidden>Please check in</button>
+            <div id="followups"></div>
           </section>
         </div>
         <details class="card history"><summary>Recent dose history</summary><div id="history-list"></div></details>
+        <details class="card history" id="appointment-report">
+          <summary>Seven-day appointment summary</summary>
+          <div id="report-content"></div>
+          <button id="print-report" class="quiet">Print summary</button>
+        </details>
         <section class="card demo" id="demo-panel" hidden>
           <div><h2>Demo dose</h2><p>Schedules a synthetic dose in 20 seconds. The demo check-in window is <span id="demo-grace">1 minute</span>.</p></div>
           <button id="add-demo" class="quiet">Schedule demo dose</button>

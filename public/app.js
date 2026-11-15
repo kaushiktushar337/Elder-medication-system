@@ -89,26 +89,66 @@ function refresh() {
 const now = () => state.now + Date.now() - syncedAt;
 const grace = dose => dose.demo ? state.demoGrace : 30 * 60_000;
 const status = dose => dose.taken_at ? 'Taken' : now() >= dose.due + grace(dose) ? 'Unconfirmed' : now() >= dose.due ? 'Due' : 'Upcoming';
-const pill = label => '<span class="pill' + (label === 'Unconfirmed' ? ' overdue' : '') + '">' + safe(label) + '</span>';
+const pill = label => '<span class="pill" data-status="' + safe(label) + '">' + safe(label) + '</span>';
 const doseDetail = dose => dose.amount + ' · ' + time(dose.due);
 
+function followupRow(item, checkin = false) {
+  const name = checkin ? 'Check-in requested' : item.name;
+  let detail = checkin ? dayTime(item.requested_at) : 'Dose unconfirmed · ' + dayTime(item.due);
+  if (item.claimed_by) {
+    detail = item.completed_at
+      ? 'Caller: ' + item.claimed_by + ' · Completed ' + dayTime(item.completed_at)
+      : 'Following up: ' + item.claimed_by + ' · ' + time(item.claimed_at);
+  }
+  const prefix = checkin ? 'checkin-' : '';
+  const canComplete = state.me.owner || item.claimed_member === state.me.id;
+  const action = item.completed_at ? pill('Checked in')
+    : item.claimed_at ? pill('Claimed') + (canComplete ? button(prefix + 'complete', item.id, 'Mark check-in complete') : '')
+      : button(prefix + 'claim', item.id, 'I’ll call', 'primary');
+  return row(name, detail, action);
+}
+
+function renderReport(current) {
+  const lastWeek = state.start - 6 * 86_400_000;
+  const recorded = state.doses.filter(dose => !dose.demo && dose.due >= lastWeek &&
+    (dose.taken_at || status(dose) === 'Unconfirmed'));
+  const confirmed = recorded.filter(dose => dose.taken_at).length;
+  const appointment = state.appointments.find(item => item.due > current);
+  show('report-content', '<h2>' + safe(state.person.name) + '</h2>'
+    + empty(date(lastWeek) + ' through ' + date(current))
+    + empty(confirmed + ' confirmed · ' + (recorded.length - confirmed) + ' unconfirmed')
+    + (appointment ? empty('Next appointment: ' + appointment.name + ' · ' + dayTime(appointment.due)) : '')
+    + (recorded.length ? recorded.map(dose => row(dose.name, dayTime(dose.due), pill(status(dose)))).join('')
+      : empty('No confirmed or unconfirmed dose records in this period.')));
+}
+
 function renderToday() {
+  const current = now();
   const today = state.doses.filter(dose => dose.due >= state.start && (dose.due < state.start + 86_400_000 || dose.demo));
-  const next = today.find(dose => !dose.taken_at && dose.due < now() && dose.due + grace(dose) > now())
-    ?? today.find(dose => !dose.taken_at && dose.due >= now());
-  const appointment = state.appointments.find(item => item.due > now());
+  const due = today.filter(dose => !dose.taken_at && dose.due <= current && current < dose.due + grace(dose));
+  const next = due[0] ?? today.find(dose => !dose.taken_at && dose.due > current);
+  const appointment = state.appointments.find(item => item.due > current);
   const followups = state.doses.filter(dose => (!dose.taken_at && status(dose) === 'Unconfirmed') || dose.claimed_at).slice(-12).reverse();
-  byId('date').textContent = date(now());
+  const taken = today.filter(dose => dose.taken_at).length;
+  byId('dose-progress').hidden = today.length === 0;
+  byId('dose-count').textContent = taken + ' of ' + today.length + ' taken';
+  byId('dose-meter').max = today.length || 1;
+  byId('dose-meter').value = taken;
+  byId('date').textContent = date(current);
   byId('welcome').textContent = 'Today for ' + state.person.name;
-  show('next-dose', next ? '<p class="metric">' + safe(next.name) + '</p>' + empty(doseDetail(next)) : empty('No more doses scheduled today.'));
-  show('next-appointment', appointment ? '<p class="metric">' + safe(appointment.name) + '</p>' + empty(dayTime(appointment.due) + (appointment.location ? ' · ' + appointment.location : '')) : empty('No upcoming appointments.'));
-  show('today-doses', today.map(dose => row(dose.name, doseDetail(dose), pill(status(dose)) + (!dose.taken_at && dose.due <= now() ? button('taken', dose.id, 'Mark taken', 'primary') : ''))).join('') || empty('Add a medication in Schedule.'));
-  show('followups', followups.map(dose => {
-    const detail = dose.claimed_by ? 'Following up: ' + dose.claimed_by + ' · ' + time(dose.claimed_at) : 'Dose unconfirmed · ' + dayTime(dose.due);
-    return row(dose.name, detail, dose.claimed_by ? pill(dose.taken_at ? 'Taken' : 'Claimed') : button('claim', dose.id, 'I’ll call', 'primary'));
-  }).join('') || empty('No follow-ups to show.'));
+  byId('next-heading').textContent = due.length ? 'Dose due now' : 'Next dose';
+  show('next-dose', next
+    ? '<p class="dose-time">' + safe(time(next.due)) + '</p><p class="metric">' + safe(next.name) + '</p>' + empty(next.amount)
+      + (due.length ? button('taken', next.id, 'Mark taken', 'primary hero-action') : '')
+    : '<p class="metric">' + (today.length > 0 && taken === today.length ? 'All doses recorded' : 'No upcoming doses today') + '</p>');
+  show('next-appointment', appointment
+    ? '<p class="appointment-date">' + safe(dayTime(appointment.due)) + '</p><p class="metric">' + safe(appointment.name) + '</p>' + (appointment.location ? empty(appointment.location) : '')
+    : empty('No upcoming appointments.'));
+  show('today-doses', today.map(dose => row(dose.name, doseDetail(dose), pill(status(dose)) + (!dose.taken_at && dose.due <= current && dose !== due[0] ? button('taken', dose.id, 'Mark taken', 'primary') : ''))).join('') || empty('Add a medication in Schedule.'));
+  byId('request-checkin').hidden = !state.me.owner || state.checkins.some(item => !item.completed_at);
+  show('followups', [...state.checkins.map(item => followupRow(item, true)), ...followups.map(dose => followupRow(dose))].join('') || empty('No follow-ups to show.'));
   show('history-list', state.doses.filter(dose => dose.due <= now()).slice(-30).reverse().map(dose => row(dose.name, dayTime(dose.due) + (dose.taken_by ? ' · Recorded by ' + dose.taken_by : ''), pill(status(dose)) + (!today.includes(dose) && !dose.taken_at ? button('taken', dose.id, 'Mark taken') : ''))).join('') || empty('No dose history yet.'));
-  const due = today.filter(dose => !dose.taken_at && dose.due <= now() && now() < dose.due + grace(dose));
+  renderReport(current);
   const alarm = byId('alarm');
   const alarmText = due.length ? 'Dose due: ' + due.map(dose => dose.name).join(', ') : '';
   if (alarm.textContent !== alarmText) alarm.textContent = alarmText;
@@ -121,7 +161,7 @@ function renderToday() {
 
 const controls = (entity, item) => button('edit-' + entity, item.id, 'Edit') + button('delete-' + entity, item.id, entity === 'medications' ? 'Retire' : 'Remove');
 const deliveryLabels = { accepted: 'Accepted by Brevo', sending: 'Sending', failed: 'Failed', retry: 'Retry pending', review: 'Check Brevo logs', unconfigured: 'Provider not configured', suppressed: 'Suppressed' };
-const reminderLabels = { upcoming: 'Upcoming dose', unconfirmed: 'Unconfirmed dose', appointment: 'Appointment' };
+const reminderLabels = { upcoming: 'Upcoming dose', unconfirmed: 'Unconfirmed dose', appointment: 'Appointment', checkin: 'Requested check-in' };
 
 function render() {
   renderToday();
@@ -287,15 +327,29 @@ document.addEventListener('click', event => {
     } else if (action === 'revoke') {
       if (!window.confirm('Revoke this person’s profile access?')) return;
       await api('contacts/' + id + '/revoke', 'POST');
+    } else if (action === 'request-checkin') {
+      await api('checkins', 'POST');
+    } else if (action.startsWith('checkin-')) {
+      await api('checkins/' + id + '/' + action.slice(8), 'POST');
     } else {
       await api('doses/' + id + '/' + action, 'POST');
     }
     await refresh();
-    notice({ taken: 'Dose recorded.', claim: 'You’re now following up.', revoke: 'Access revoked.' }[action] || 'Entry removed.');
+    const messages = {
+      taken: 'Dose recorded.',
+      claim: 'You’re now following up.',
+      'checkin-claim': 'You’re now following up.',
+      complete: 'Check-in marked complete.',
+      'checkin-complete': 'Check-in marked complete.',
+      'request-checkin': 'Check-in requested.',
+      revoke: 'Access revoked.'
+    };
+    notice(messages[action] || 'Entry removed.');
   });
 });
 
 const sync = () => refresh().catch(error => { if (state) notice(error.message, true); });
+byId('print-report').addEventListener('click', () => window.print());
 setInterval(() => { if (state && !document.hidden) renderToday(); }, 1000);
 setInterval(() => { if (state && !document.hidden) sync(); }, 8000);
 document.addEventListener('visibilitychange', () => { if (state && !document.hidden) sync(); });

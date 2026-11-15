@@ -17,7 +17,7 @@ let DB;
 if (process.env.DATABASE_URL) {
   const { postgres } = await import('./postgres.mjs');
   try {
-    DB = await postgres(process.env.DATABASE_URL, process.env.SUPABASE_DB_CA);
+    DB = await postgres(process.env.DATABASE_URL, process.env.SUPABASE_DB_CA, process.env.SUPABASE_TLS_MODE);
   } catch (error) {
     console.error('Supabase connection or migration failed', error.code || error.name);
     process.exit(1);

@@ -14,6 +14,10 @@ npm run dev
 
 Open [localhost:3000](http://localhost:3000). Local development uses SQLite unless you set `DATABASE_URL`. Copy [.env.example](.env.example) to `.env` to configure live email or connect to Supabase. Keep credentials in environment variables.
 
+To check the Supabase connection before starting the API, put the Session pooler URL in the ignored `.env` file and run `npm run db:check`. The check reports whether the migration table exists. Starting the API applies pending setup.
+
+The default `SUPABASE_TLS_MODE=verify-full` verifies the database server certificate. For a temporary demo, `SUPABASE_TLS_MODE=require` still encrypts the connection but skips server identity verification. Remove the override once the CA certificate is available.
+
 ## Deploy on Vercel, Render Free, and Supabase
 
 1. Push this project to your team's Git repository. Create a Supabase project and copy its **Connect → Session pooler** PostgreSQL connection string on port 5432. Replace the password placeholder with the database password, URL-encoding special characters. The Render service creates and migrates a private `carecircle` database schema on startup. If Node reports a TLS certificate error, set `SUPABASE_DB_CA` on Render to the Supabase-provided certificate PEM. [Supabase connection guide](https://supabase.com/docs/guides/database/connecting-to-postgres)
@@ -41,5 +45,7 @@ Render Free sleeps after 15 minutes of inactivity. Supabase preserves profile an
 4. On the owner’s **Today** screen, enable sound and schedule a demo dose. The open page displays the alert and sounds in about 20 seconds. Leave the dose unconfirmed for one minute. The next server tick sends the check-in email, so allow up to another minute.
 5. In the caregiver session, tap **I’ll call**. Show the caregiver’s name in both sessions. Record **Mark taken** as the owner and show that the history retains both actions.
 6. Verify revocation from the owner’s view. For judge access, create a fresh synthetic profile and share only the intended passcodes. Create the profile shortly before submission so it is available for the walkthrough.
+
+For an elder-initiated handoff, tap **Please check in** in Today. The request appears in the caregiver’s Today view, and the next scheduler run alerts opted-in contacts if it is still waiting for a caller. After claiming it, the caller or profile owner can mark the check-in complete. The same completion action is available on claimed dose follow-ups and leaves the dose’s confirmation status separate.
 
 The test suite exercises the API with a test sender. To run it against an embedded PostgreSQL runtime, install `@electric-sql/pglite` temporarily with `npm install --no-save --package-lock=false @electric-sql/pglite` and set `TEST_POSTGRES=1` before running `npm test`.
