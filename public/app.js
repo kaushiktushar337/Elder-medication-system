@@ -6,11 +6,14 @@ const time = value => new Intl.DateTimeFormat(locale(), timeOptions).format(valu
 const date = value => new Intl.DateTimeFormat(locale(), { timeZone: 'Asia/Kolkata', weekday: 'long', day: 'numeric', month: 'long' }).format(value);
 const dayTime = value => date(value) + ' · ' + time(value);
 const safe = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+const label = value => safe(tr(value));
 const empty = message => '<p>' + safe(message) + '</p>';
 const button = (action, id, label, kind = 'quiet') => '<button class="' + kind + '" data-action="' + action + '" data-id="' + safe(id) + '">' + safe(tr(label)) + '</button>';
 const row = (name, detail, actions = '') => '<div class="row"><div><strong>' + safe(name) + '</strong><p>' + safe(detail) + '</p></div><div class="actions">' + actions + '</div></div>';
 let state;
 let activePatient = '';
+let editingHandoff = false;
+let noticeMessage = '';
 let careTeam = false;
 let activeView = 'today';
 let syncedAt = 0;
@@ -60,7 +63,8 @@ function show(id, markup) {
 
 function notice(message = '', error = false) {
   const element = byId('notice');
-  element.textContent = message;
+  noticeMessage = message;
+  element.textContent = tr(message);
   element.toggleAttribute('data-error', error);
 }
 
@@ -93,6 +97,7 @@ function auth() {
   resetInviteReview();
   state = undefined;
   activePatient = '';
+  editingHandoff = false;
   careTeam = false;
   byId('patient-access').hidden = true;
   byId('no-patients').hidden = true;
@@ -160,19 +165,20 @@ function refresh() {
     const selected = activePatient;
     byId('patient-access').hidden = !careTeam || Boolean(selected);
     byId('back-patients').hidden = !careTeam;
-    byId('back-patients').textContent = inbox.length ? '← Back to patient list · ' + inbox.length + ' new ' + (inbox.length === 1 ? 'invitation' : 'invitations') : '← Back to patient list';
+    byId('back-patients').textContent = tr('← Back to patient list') + (inbox.length ? ' · ' + inbox.length + ' ' + tr(inbox.length === 1 ? 'new invitation' : 'new invitations') : '');
     byId('invitations-panel').hidden = !careTeam;
     byId('doctor-visits-panel').hidden = !doctorDashboard;
-    show('invitations-list', inbox.map(invite => '<form class="inbox-invite" data-invite="' + safe(invite.id) + '"><h3>' + safe(invite.name) + '</h3><label>Your relationship<select name="relationship" required><option value="">Choose a relationship</option><option>Family</option><option>Caregiver</option><option>Doctor</option><option>Other</option></select></label><div class="actions"><button class="primary" value="accept">Accept</button><button class="quiet" value="decline" formnovalidate>Decline</button></div></form>').join('') || empty('No pending invitations.'));
-    show('doctor-visits-list', visits.map(visit => row(visit.patient_name, visit.name + ' · ' + (visit.status === 'pending' ? 'Awaiting scheduling' : dayTime(visit.due)),
-      '<button class="quiet" data-patient="' + safe(visit.patient) + '" data-destination="appointments">Open appointment</button>')).join('') || empty('No upcoming appointments or requests.'));
+    const relationships = ['Family', 'Caregiver', 'Doctor', 'Other'].map(value => '<option value="' + value + '">' + label(value) + '</option>').join('');
+    show('invitations-list', inbox.map(invite => '<form class="inbox-invite" data-invite="' + safe(invite.id) + '"><h3>' + safe(invite.name) + '</h3><label>' + label('Your relationship') + '<select name="relationship" required><option value="">' + label('Select relationship') + '</option>' + relationships + '</select></label><div class="actions"><button class="primary" value="accept">' + label('Accept') + '</button><button class="quiet" value="decline" formnovalidate>' + label('Decline') + '</button></div></form>').join('') || empty(tr('No pending invitations.')));
+    show('doctor-visits-list', visits.map(visit => row(visit.patient_name, visit.name + ' · ' + (visit.status === 'pending' ? tr('Awaiting scheduling') : tr('Scheduled') + ' · ' + dayTime(visit.due)),
+      '<button class="quiet" data-patient="' + safe(visit.patient) + '" data-destination="appointments">' + label('Open appointment') + '</button>')).join('') || empty(tr('No upcoming appointments or requests.')));
     show('patient-cards', patients.map(item => {
-      const labels = [item.relationship];
-      if (item.overdue) labels.push(item.overdue + ' overdue');
-      if (item.pending) labels.push(item.pending + ' appointment ' + (item.pending === 1 ? 'request' : 'requests'));
+      const labels = [tr(item.relationship)];
+      if (item.overdue) labels.push(item.overdue + ' ' + tr('overdue'));
+      if (item.pending) labels.push(item.pending + ' ' + tr(item.pending === 1 ? 'appointment request' : 'appointment requests'));
       return '<button class="patient-card" data-patient="' + safe(item.id) + '" aria-pressed="' + (selected === item.id) + '" data-priority="' + (item.overdue ? 'overdue' : item.pending ? 'pending' : 'normal') + '"><strong>' + safe(item.name) + '</strong><span>' + safe(labels.filter(Boolean).join(' · ')) + '</span></button>';
     }).join(''));
-    byId('patient-heading').textContent = (doctorDashboard ? 'Doctor dashboard' : 'Family & caregiver dashboard') + ' · ' + account.name;
+    byId('patient-heading').textContent = tr(doctorDashboard ? 'Doctor dashboard' : 'Family & caregiver dashboard') + ' · ' + account.name;
     byId('patient-avatar').textContent = Array.from(account.name)[0]?.toUpperCase() || '•';
     if (!selected) {
       state = undefined;
@@ -377,16 +383,16 @@ byId('read-today').addEventListener('click', () => {
 });
 
 function followupRow(item, checkin = false) {
-  const name = checkin ? 'Check-in requested' : item.name;
-  let detail = checkin ? dayTime(item.requested_at) : 'Dose unconfirmed · ' + dayTime(item.due);
+  const name = checkin ? tr('Check-in requested') : item.name;
+  let detail = checkin ? dayTime(item.requested_at) : tr('Dose unconfirmed') + ' · ' + dayTime(item.due);
   if (item.claimed_by) {
     detail = item.completed_at
-      ? 'Caller: ' + item.claimed_by + ' · Completed ' + dayTime(item.completed_at)
-      : 'Following up: ' + item.claimed_by + ' · ' + time(item.claimed_at);
+      ? tr('Caller') + ': ' + item.claimed_by + ' · ' + tr('Completed') + ' ' + dayTime(item.completed_at)
+      : tr('Following up') + ': ' + item.claimed_by + ' · ' + time(item.claimed_at);
   }
   const notifications = (state.handoffNotices || []).filter(entry => entry.event === item.id);
   if (notifications.length) detail += ' · ' + notifications.map(entry =>
-    entry.name + (entry.kind.endsWith('_backup') ? ' (backup)' : '') + ' emailed ' + time(entry.attempted)).join(', ');
+    entry.name + (entry.kind.endsWith('_backup') ? ' ' + tr('(backup)') : '') + ' · ' + tr('Email sent') + ' ' + time(entry.attempted)).join(', ');
   const prefix = checkin ? 'checkin-' : '';
   const canComplete = state.me.owner || item.claimed_member === state.me.id;
   const action = item.completed_at ? pill('Checked in')
@@ -408,12 +414,12 @@ function renderReport(current) {
     return '<tr><th scope="row">' + safe(date(start)) + '</th><td>' + taken + '</td><td>' + (entries.length - taken) + '</td></tr>';
   });
   show('report-content', '<h2>' + safe(state.person.name) + '</h2>'
-    + empty(date(lastWeek) + ' through ' + date(current))
-    + empty(confirmed + ' confirmed · ' + (recorded.length - confirmed) + ' unconfirmed')
-    + (appointment ? empty('Next appointment: ' + appointment.name + ' · ' + dayTime(appointment.due) + (appointment.location ? ' · ' + appointment.location : '')) : '')
-    + (recorded.length ? '<table class="report-table"><caption>Dose records by day</caption><thead><tr><th scope="col">Day</th><th scope="col">Confirmed</th><th scope="col">Unconfirmed</th></tr></thead><tbody>' + days.join('') + '</tbody></table>'
-      + '<h3>Dose details</h3>' + recorded.map(dose => row(dose.name, dose.amount + ' · ' + dayTime(dose.due), pill(status(dose)))).join('')
-      : empty('No confirmed or unconfirmed dose records in this period.')));
+    + empty(date(lastWeek) + ' – ' + date(current))
+    + empty(confirmed + ' ' + tr('Confirmed') + ' · ' + (recorded.length - confirmed) + ' ' + tr('Unconfirmed'))
+    + (appointment ? empty(tr('Next appointment') + ': ' + appointment.name + ' · ' + dayTime(appointment.due) + (appointment.location ? ' · ' + appointment.location : '')) : '')
+    + (recorded.length ? '<table class="report-table"><caption>' + label('Dose records by day') + '</caption><thead><tr><th scope="col">' + label('Day') + '</th><th scope="col">' + label('Confirmed') + '</th><th scope="col">' + label('Unconfirmed') + '</th></tr></thead><tbody>' + days.join('') + '</tbody></table>'
+      + '<h3>' + label('Dose details') + '</h3>' + recorded.map(dose => row(dose.name, dose.amount + ' · ' + dayTime(dose.due), pill(status(dose)))).join('')
+      : empty(tr('No confirmed or unconfirmed dose records in this period.'))));
 }
 
 function todayAppointment() {
@@ -452,7 +458,7 @@ function renderToday() {
   show('today-doses', today.map(dose => row(dose.name, doseDetail(dose), pill(status(dose)) + (!dose.taken_at && dose.due <= current && dose !== due[0] ? button('taken', dose.id, 'Mark taken', 'primary') : ''))).join('') || empty(tr('Add a medication in Schedule.')));
   byId('request-checkin').hidden = !state.me.owner || state.checkins.some(item => !item.completed_at);
   show('followups', [...state.checkins.map(item => followupRow(item, true)), ...followups.map(dose => followupRow(dose))].join('') || empty(tr('No follow-ups to show.')));
-  show('history-list', state.doses.filter(dose => dose.due <= now()).slice(-30).reverse().map(dose => row(dose.name, dayTime(dose.due) + (dose.taken_by ? ' · Recorded by ' + dose.taken_by : ''), pill(status(dose)) + (!today.includes(dose) && !dose.taken_at ? button('taken', dose.id, 'Mark taken') : ''))).join('') || empty(tr('No dose history yet.')));
+  show('history-list', state.doses.filter(dose => dose.due <= now()).slice(-30).reverse().map(dose => row(dose.name, dayTime(dose.due) + (dose.taken_by ? ' · ' + tr('Recorded by') + ' ' + dose.taken_by : ''), pill(status(dose)) + (!today.includes(dose) && !dose.taken_at ? button('taken', dose.id, 'Mark taken') : ''))).join('') || empty(tr('No dose history yet.')));
   renderReport(current);
   const alarmText = due.length ? (inHindi() ? 'खुराक का समय: ' : 'Dose due: ') + due.map(dose => dose.name).join(', ') : '';
   if (byId('alarm-message').textContent !== alarmText) byId('alarm-message').textContent = alarmText;
@@ -469,48 +475,65 @@ const controls = (entity, item) => button('edit-' + entity, item.id, 'Edit') + b
 const deliveryLabels = { accepted: 'Email sent', sending: 'Sending', failed: 'Failed', retry: 'Retry pending', review: 'Check delivery logs', unconfigured: 'Provider not configured', suppressed: 'Suppressed' };
 const reminderLabels = { upcoming: 'Upcoming dose', unconfirmed: 'Unconfirmed dose', appointment: 'Appointment', appointment_request: 'Appointment request', appointment_change: 'Alternate appointment time', checkin: 'Requested check-in', checkin_backup: 'Check-in backup', dose_backup: 'Dose follow-up backup', refill: 'Refill reminder' };
 
-const personOptions = (people, selected, placeholder) => '<option value="">' + placeholder + '</option>' +
-  people.map(person => '<option value="' + safe(person.id) + '"' + (person.id === selected ? ' selected' : '') + '>' + safe(person.name + ' · ' + person.relationship) + '</option>').join('');
+const personOptions = (people, selected, placeholder) => '<option value="">' + safe(tr(placeholder)) + '</option>' +
+  people.map(person => '<option value="' + safe(person.id) + '"' + (person.id === selected ? ' selected' : '') + '>' + safe(person.name + ' · ' + tr(person.relationship)) + '</option>').join('');
 
 function renderRefills() {
   const tracked = state.refills || [];
   show('refill-cards', state.medications.map(medication => {
     const refill = tracked.find(item => item.medication === medication.id);
     const low = refill?.runout && refill.remaining <= refill.threshold;
-    const count = refill ? refill.remaining + ' doses left' : 'Refill tracking is off.';
-    const timing = refill?.runout ? empty('First dose without supply: ' + dayTime(refill.runout)) : '';
+    const count = refill ? refill.remaining + ' ' + tr('doses left') : tr('Refill tracking is off.');
+    const timing = refill?.runout ? empty(tr('First dose without supply') + ': ' + dayTime(refill.runout)) : '';
     const preferences = state.me.owner
-      ? '<label>Remind me at this many doses left<input name="threshold" type="number" min="0" max="90" required value="' + (refill?.threshold ?? 3) + '"></label>'
-        + '<label>Send the refill email to<select name="contact">' + personOptions(state.people || [], refill?.contact, 'Me') + '</select></label>'
+      ? '<label>' + label('Remind me at this many doses left') + '<input name="threshold" type="number" min="0" max="90" required value="' + (refill?.threshold ?? 3) + '"></label>'
+        + '<label>' + label('Send the refill email to') + '<select name="contact">' + personOptions(state.people || [], refill?.contact, 'Me') + '</select></label>'
       : '';
     const form = state.me.owner || refill
-      ? '<form class="stack" data-refill="' + safe(medication.id) + '"><label>Counted doses left<input name="quantity" type="number" min="0" max="10000" required value="' + (refill?.remaining ?? '') + '"></label>'
-        + preferences + '<div class="actions"><button class="primary">Save dose count</button>'
+      ? '<form class="stack" data-refill="' + safe(medication.id) + '"><label>' + label('Counted doses left') + '<input name="quantity" type="number" min="0" max="10000" required value="' + (refill?.remaining ?? '') + '"></label>'
+        + preferences + '<div class="actions"><button class="primary">' + label('Save dose count') + '</button>'
         + (state.me.owner && refill ? button('disable-refill', medication.id, 'Stop tracking') : '') + '</div></form>'
       : '';
     return '<article class="card"' + (low ? ' data-low' : '') + '><h2>' + safe(medication.name) + '</h2>' + empty(count) + timing + form + '</article>';
-  }).join('') || empty('Add a medication in Schedule to track refills.'));
+  }).join('') || empty(tr('Add a medication in Schedule to track refills.')));
 }
 
 function renderHandoff() {
   const people = state.people || [];
   const form = byId('handoff-form');
-  form.hidden = !state.me.owner || people.length < 2;
-  byId('handoff-empty').hidden = !state.me.owner || people.length >= 2;
-  byId('disable-handoff').hidden = !state.handoff;
   const rule = state.handoff;
+  if (!state.me.owner || !rule || people.length < 2) editingHandoff = false;
+  form.hidden = !state.me.owner || people.length < 2 || Boolean(rule && !editingHandoff);
+  byId('handoff-empty').hidden = !state.me.owner || people.length >= 2;
+  byId('handoff-saved').hidden = !state.me.owner || !rule || editingHandoff;
+  byId('edit-handoff').disabled = people.length < 2;
+  byId('cancel-handoff').hidden = !rule;
+  if (rule) {
+    const contact = id => {
+      const person = people.find(item => item.id === id);
+      return person ? person.name + ' · ' + tr(person.relationship) : tr('Contact unavailable');
+    };
+    show('handoff-summary',
+      row(tr('Primary contact'), contact(rule.primary_member)) +
+      row(tr('Backup contact'), contact(rule.backup_member)) +
+      row(tr('Wait before notifying backup (minutes)'), String(rule.wait_minutes)));
+  }
   const version = [activePatient, rule?.primary_member, rule?.backup_member, rule?.wait_minutes, ...people.map(item => item.id)].join('|');
-  if (form.dataset.version === version) return;
+  if (form.dataset.version === version && form.dataset.language === locale()) return;
+  const selections = !form.hidden && form.dataset.version === version
+    ? [form.elements.primary.value, form.elements.backup.value, form.elements.wait.value] : null;
   form.dataset.version = version;
+  form.dataset.language = locale();
   show('handoff-primary', personOptions(people, rule?.primary_member, 'Choose primary'));
   show('handoff-backup', personOptions(people, rule?.backup_member, 'Choose backup'));
   form.elements.primary.value = people.some(item => item.id === rule?.primary_member) ? rule.primary_member : '';
   form.elements.backup.value = people.some(item => item.id === rule?.backup_member) ? rule.backup_member : '';
   form.elements.wait.value = rule?.wait_minutes ?? 15;
+  if (selections) [form.elements.primary.value, form.elements.backup.value, form.elements.wait.value] = selections;
 }
 
 function visitForm(item, action, fields, label) {
-  return '<form class="visit-form" data-request="' + safe(item.id) + '" data-mode="' + action + '">' + fields + '<button class="primary">' + label + '</button></form>';
+  return '<form class="visit-form" data-request="' + safe(item.id) + '" data-mode="' + action + '">' + fields + '<button class="primary">' + safe(tr(label)) + '</button></form>';
 }
 
 function visitDetails(item) {
@@ -518,13 +541,15 @@ function visitDetails(item) {
   const doctor = state.me.relationship === 'Doctor';
   const future = item.status === 'scheduled' && item.due > now();
   const completed = item.status === 'scheduled' && !future;
-  const questionsField = '<label>Questions for the doctor<textarea name="questions" rows="3" maxlength="1000">' + safe(item.questions) + '</textarea></label>';
+  const questions = safe(tr('Questions for the doctor'));
+  const summary = safe(tr('Visit summary'));
+  const questionsField = '<label>' + questions + '<textarea name="questions" rows="3" maxlength="1000">' + safe(item.questions) + '</textarea></label>';
   const parts = [];
-  if (item.questions) parts.push('<p class="visit-notes"><strong>Questions for the doctor</strong><br>' + safe(item.questions) + '</p>');
+  if (item.questions) parts.push('<p class="visit-notes"><strong>' + questions + '</strong><br>' + safe(item.questions) + '</p>');
   if (patient && (future || item.status === 'pending')) parts.push(visitForm(item, 'questions', questionsField, 'Save questions'));
   if (item.proposal_state) {
     const decision = item.proposal_state === 'pending' ? (future ? 'Awaiting doctor’s reply' : 'Proposal expired') : item.proposal_state === 'accepted' ? 'Alternate time accepted' : 'Alternate time declined';
-    parts.push(empty(decision + ' · ' + dayTime(item.proposed_due)));
+    parts.push(empty(tr(decision) + ' · ' + dayTime(item.proposed_due)));
     if (item.proposal_reason) parts.push('<p class="visit-notes"><strong>' + safe(tr('Reason for the change')) + '</strong><br>' + safe(item.proposal_reason) + '</p>');
   }
   if (patient && future) parts.push(button('change-visit', item.id, 'Request a change'));
@@ -532,35 +557,35 @@ function visitDetails(item) {
     const key = item.id + '|' + item.proposed_due;
     parts.push('<div class="actions">' + button('accept-proposal', key, 'Accept alternate time', 'primary') + button('decline-proposal', key, 'Decline alternate time') + '</div>');
   }
-  if (item.visit_summary) parts.push('<p class="visit-notes"><strong>Visit summary</strong><br>' + safe(item.visit_summary) + '</p>');
-  if (doctor && completed) parts.push(visitForm(item, 'summary', '<label>Visit summary<textarea name="summary" rows="4" maxlength="1500" required>' + safe(item.visit_summary) + '</textarea></label>', 'Save visit summary'));
+  if (item.visit_summary) parts.push('<p class="visit-notes"><strong>' + summary + '</strong><br>' + safe(item.visit_summary) + '</p>');
+  if (doctor && completed) parts.push(visitForm(item, 'summary', '<label>' + summary + '<textarea name="summary" rows="4" maxlength="1500" required>' + safe(item.visit_summary) + '</textarea></label>', 'Save visit summary'));
   return parts.join('');
 }
 
 function renderSchedule() {
-  show('medication-list', state.medications.map(item => '<article class="medication-entry">' + row(item.name, item.amount + ' · ' + item.time + ' IST · ' + (item.interval_days === 1 ? 'Daily' : 'Every ' + item.interval_days + ' days')
-    + (item.updated_by ? ' · Updated by ' + item.updated_by + ' · Effective ' + dayTime(Math.max(item.effective, item.start_day || 0)) : ''), controls('medications', item)) + photoMarkup(item)
+  show('medication-list', state.medications.map(item => '<article class="medication-entry">' + row(item.name, item.amount + ' · ' + item.time + ' IST · ' + (item.interval_days === 1 ? tr('Daily') : tr('Every {days} days').replace('{days}', item.interval_days))
+    + (item.updated_by ? ' · ' + tr('Updated by') + ' ' + item.updated_by + ' · ' + tr('Effective') + ' ' + dayTime(Math.max(item.effective, item.start_day || 0)) : ''), controls('medications', item)) + photoMarkup(item)
     + '<form class="photo-form" data-photo="' + safe(item.id) + '"><label>' + safe(tr('Medication photo')) + '<input type="file" name="photo" accept="image/jpeg,image/png,image/webp,image/avif,image/heic" required></label>'
     + '<div class="actions"><button class="quiet">' + safe(tr('Add or replace photo')) + '</button>'
-    + (item.photo_revision ? '<button type="button" class="quiet" data-action="remove-photo" data-id="' + safe(item.id) + '">' + safe(tr('Remove photo')) + '</button>' : '') + '</div></form></article>').join('') || empty('No medications yet.'));
+    + (item.photo_revision ? '<button type="button" class="quiet" data-action="remove-photo" data-id="' + safe(item.id) + '">' + safe(tr('Remove photo')) + '</button>' : '') + '</div></form></article>').join('') || empty(tr('No medications yet.')));
   const canRequest = state.me.canRequestAppointment ?? state.me.owner;
   byId('appointment-form').hidden = state.me.relationship !== 'Doctor';
   byId('request-appointment-form').hidden = !canRequest || !state.doctors.length;
   byId('no-linked-doctors').hidden = !canRequest || Boolean(state.doctors.length);
-  byId('no-linked-doctors').textContent = state.me.owner ? 'Invite your doctor from People & access before requesting an appointment.' : 'Ask the patient to link their doctor before requesting an appointment.';
+  byId('no-linked-doctors').textContent = tr(state.me.owner ? 'Invite your doctor from People & access before requesting an appointment.' : 'Ask the patient to link their doctor before requesting an appointment.');
   show('doctor-picker', '<option value="">' + safe(tr('Choose doctor')) + '</option>' + state.doctors.map(doctor => '<option value="' + safe(doctor.id) + '">' + safe(doctor.name) + '</option>').join(''));
   const todayVisit = todayAppointment();
   const awaitingChange = todayVisit && state.requests.find(item => item.id === todayVisit.id && item.proposal_state === 'pending');
   show('today-request-status', state.me.owner ? awaitingChange ? empty(tr('Change requested') + ' · ' + dayTime(awaitingChange.proposed_due))
-    : !todayVisit ? state.requests.filter(item => item.status === 'pending').slice(0, 2).map(item => empty(item.name + ' · Awaiting ' + item.doctor_name)).join('') : '' : '');
+    : !todayVisit ? state.requests.filter(item => item.status === 'pending').slice(0, 2).map(item => empty(item.name + ' · ' + tr('Awaiting response') + ' · ' + item.doctor_name)).join('') : '' : '');
   show('appointment-requests', state.requests.map(item => {
-    const description = item.doctor_name + ' · ' + (item.status === 'scheduled' ? dayTime(item.due) + (item.location ? ' · ' + item.location : '') : item.status === 'pending' ? 'Awaiting response' : item.status);
+    const description = item.doctor_name + ' · ' + (item.status === 'scheduled' ? tr('Scheduled') + ' · ' + dayTime(item.due) + (item.location ? ' · ' + item.location : '') : tr(item.status === 'pending' ? 'Awaiting response' : item.status));
     let actions = item.status === 'pending' && state.me.owner ? button('cancel-request', item.id, 'Cancel request') : '';
-    if (item.status === 'pending' && state.me.relationship === 'Doctor') actions = '<form class="request-response" data-request="' + safe(item.id) + '"><label>Appointment time (IST)<input name="due" type="datetime-local" required></label><label>Location<input name="location" maxlength="100"></label><button class="primary">Accept and schedule</button></form>' + button('decline-request', item.id, 'Decline');
+    if (item.status === 'pending' && state.me.relationship === 'Doctor') actions = '<form class="request-response" data-request="' + safe(item.id) + '"><label>' + safe(tr('Appointment time (IST)')) + '<input name="due" type="datetime-local" required></label><label>' + safe(tr('Location')) + '<input name="location" maxlength="100"></label><button class="primary">' + safe(tr('Accept and schedule')) + '</button></form>' + button('decline-request', item.id, 'Decline');
     return '<article class="visit-entry">' + row(item.name, description, actions) + visitDetails(item) + '</article>';
   }).join(''));
   const standalone = state.appointments.filter(item => !state.requests.some(request => request.id === item.id));
-  show('appointment-list', standalone.map(item => row(item.name, dayTime(item.due) + (item.location ? ' · ' + item.location : ''), state.me.relationship === 'Doctor' && !item.status ? controls('appointments', item) : state.me.owner && item.due > now() ? button('change-visit', item.id, 'Request a change') : '')).join('') || (state.requests.length ? '' : empty(tr('No appointments scheduled.'))));
+  show('appointment-list', standalone.map(item => row(item.name, tr('Scheduled') + ' · ' + dayTime(item.due) + (item.location ? ' · ' + item.location : ''), state.me.relationship === 'Doctor' && !item.status ? controls('appointments', item) : state.me.owner && item.due > now() ? button('change-visit', item.id, 'Request a change') : '')).join('') || (state.requests.length ? '' : empty(tr('No appointments scheduled.'))));
   show('week-plan', Array.from({ length: 7 }, (_, index) => {
     const day = state.start + index * dayLength;
     const schedule = state.medications.filter(item => {
@@ -569,7 +594,7 @@ function renderSchedule() {
         (item.start_day == null || (day >= item.start_day && ((day - item.start_day) / dayLength) % item.interval_days === 0)) &&
         (item.end_day == null || day <= item.end_day) && !item.skip_dates.includes('|' + isoDay(day) + '|');
     });
-    return '<section><h3>' + safe(date(day)) + '</h3>' + (schedule.map(item => empty(item.time + ' · ' + item.name + ' · ' + item.amount)).join('') || empty('No doses scheduled')) + '</section>';
+    return '<section><h3>' + safe(date(day)) + '</h3>' + (schedule.map(item => empty(item.time + ' · ' + item.name + ' · ' + item.amount)).join('') || empty(tr('No doses scheduled'))) + '</section>';
   }).join(''));
   loadVisiblePhotos();
 }
@@ -587,13 +612,13 @@ function render() {
   renderRefills();
   renderHandoff();
   show('access-list', state.contacts.filter(item => item.account && !item.revoked).map(item =>
-    row(item.access_name, item.relationship + ' · Can view and manage your schedule')).join('') || empty('Only you can access your schedule right now.'));
+    row(item.access_name, tr(item.relationship) + ' · ' + tr('Can view and manage your schedule'))).join('') || empty(tr('Only you can access your schedule right now.')));
   show('contact-list', state.contacts.map(item => {
     const access = item.declined_at ? 'Invitation declined' : item.revoked ? 'Access revoked' : item.account ? item.relationship
       : item.invite_expires && item.invite_expires <= now() ? 'Invitation expired' : item.member ? 'Invite pending' : 'Alerts only';
-    return row(item.name, [item.email, item.phone, access, item.alerts && !item.declined_at ? 'Alerts on' : 'Alerts off'].filter(Boolean).join(' · '), controls('contacts', item) + (item.member && !item.revoked ? button('revoke', item.id, item.account ? 'Revoke access' : 'Cancel invitation') : ''));
-  }).join('') || empty('Add a family member, caregiver, or doctor.'));
-  show('delivery-list', state.deliveries.map(item => row(reminderLabels[item.kind], item.recipient + ' · ' + time(item.attempted), pill(item.state === 'accepted' && item.channel === 'sms' ? 'SMS sent' : deliveryLabels[item.state] || item.state))).join('') || empty('No reminders sent yet.'));
+    return row(item.name, [item.email, item.phone, tr(access), tr(item.alerts && !item.declined_at ? 'Alerts on' : 'Alerts off')].filter(Boolean).join(' · '), controls('contacts', item) + (item.member && !item.revoked ? button('revoke', item.id, item.account ? 'Revoke access' : 'Cancel invitation') : ''));
+  }).join('') || empty(tr('Add a family member, caregiver, or doctor.')));
+  show('delivery-list', state.deliveries.map(item => row(tr(reminderLabels[item.kind]), item.recipient + ' · ' + time(item.attempted), pill(item.state === 'accepted' && item.channel === 'sms' ? 'SMS sent' : deliveryLabels[item.state] || item.state))).join('') || empty(tr('No reminders sent yet.')));
 }
 
 function tone(output) {
@@ -653,9 +678,9 @@ byId('sound').addEventListener('click', async () => {
 });
 
 function passcode(value, context, title = 'Save your sign-in code') {
-  byId('passcode-title').textContent = title;
+  byId('passcode-title').textContent = tr(title);
   byId('passcode-value').value = value.length === 6 ? value : value.match(/.{1,8}/g).join('-');
-  byId('passcode-context').textContent = context;
+  byId('passcode-context').textContent = tr(context);
   byId('passcode-dialog').showModal();
 }
 byId('passcode-dialog').addEventListener('close', () => { byId('passcode-value').value = ''; });
@@ -663,10 +688,10 @@ byId('copy-code').addEventListener('click', async () => {
   const input = byId('passcode-value');
   try {
     await navigator.clipboard.writeText(input.value);
-    byId('copy-code').textContent = 'Copied';
+    byId('copy-code').textContent = tr('Copied');
   } catch { input.select(); }
 });
-byId('passcode-dialog').addEventListener('close', () => { byId('copy-code').textContent = 'Copy passcode'; });
+byId('passcode-dialog').addEventListener('close', () => { byId('copy-code').textContent = tr('Copy passcode'); });
 
 const forms = {
   'medication-form': ['medications', 'medication'],
@@ -677,12 +702,16 @@ const formValues = form => Object.fromEntries(new FormData(form));
 function cancelEdit(form) {
   form.reset();
   delete form.dataset.edit;
-  form.querySelector('button.primary').textContent = form.id === 'contact-form' ? 'Add contact or invite' : 'Add ' + forms[form.id][1];
+  renderFormButton(form);
   form.querySelector('.cancel').hidden = true;
   if (form.id === 'contact-form') {
     byId('invite-label').hidden = false;
     byId('email-invite-label').hidden = false;
   }
+}
+
+function renderFormButton(form) {
+  form.querySelector('button.primary').textContent = tr(form.dataset.edit ? 'Save changes' : form.id === 'contact-form' ? 'Add contact or invite' : 'Add ' + forms[form.id][1]);
 }
 
 async function perform(control, action) {
@@ -743,6 +772,7 @@ function selectPatient(id) {
   clearPhotos();
   byId('change-dialog').close();
   activePatient = id;
+  editingHandoff = false;
   state = undefined;
   byId('dashboard').hidden = true;
   byId('navigation').hidden = true;
@@ -804,7 +834,7 @@ byId('change-form').addEventListener('submit', async event => {
     await refresh();
     notice(tr('Change requested'));
   } catch (error) {
-    byId('change-error').textContent = error.message;
+    byId('change-error').textContent = tr(error.message);
     byId('change-error').hidden = false;
   } finally { submit.disabled = false; }
 });
@@ -856,18 +886,32 @@ byId('refill-cards').addEventListener('submit', event => {
     notice('Dose count saved.');
   });
 });
+byId('edit-handoff').addEventListener('click', () => {
+  editingHandoff = true;
+  renderHandoff();
+  byId('handoff-primary').focus();
+});
+byId('cancel-handoff').addEventListener('click', () => {
+  editingHandoff = false;
+  delete byId('handoff-form').dataset.version;
+  renderHandoff();
+  byId('edit-handoff').focus();
+});
 byId('handoff-form').addEventListener('submit', event => {
   event.preventDefault();
   const form = event.target;
   perform(form.querySelector('button.primary'), async () => {
     await api('handoff', 'POST', formValues(form));
+    editingHandoff = false;
     await refresh();
+    if (!byId('handoff-saved').hidden) byId('edit-handoff').focus();
     notice('Handoff rule saved.');
   });
 });
 byId('disable-handoff').addEventListener('click', event => perform(event.currentTarget, async () => {
   await api('handoff', 'DELETE');
   await refresh();
+  if (!byId('handoff-form').hidden) byId('handoff-primary').focus();
   notice('Handoff escalation disabled.');
 }));
 byId('request-appointment-form').addEventListener('submit', event => {
@@ -899,7 +943,7 @@ function resetInviteReview() {
   byId('invite-relationship').hidden = true;
   byId('join-form').elements.relationship.required = false;
   byId('join-form').elements.relationship.value = '';
-  byId('review-invite').textContent = 'Review invitation';
+  byId('review-invite').textContent = tr('Review invitation');
   byId('decline-invite').hidden = true;
 }
 
@@ -914,11 +958,11 @@ byId('join-form').addEventListener('submit', event => {
     if (decision === 'preview') {
       if (form.elements.key.value !== values.key) return;
       reviewedInvite = values.key;
-      byId('invite-preview').textContent = 'Invitation from ' + result.name;
+      byId('invite-preview').textContent = tr('Invitation from') + ' ' + result.name;
       byId('invite-preview').hidden = false;
       byId('invite-relationship').hidden = false;
       form.elements.relationship.required = true;
-      byId('review-invite').textContent = 'Accept invitation';
+      byId('review-invite').textContent = tr('Accept invitation');
       byId('decline-invite').hidden = false;
       return;
     }
@@ -965,19 +1009,19 @@ document.addEventListener('click', event => {
       byId('email-invite-label').hidden = true;
     }
     form.querySelector('.cancel').hidden = false;
-    form.querySelector('.primary').textContent = 'Save changes';
+    renderFormButton(form);
     form.elements.name.focus();
     return;
   }
   perform(control, async () => {
     if (action.startsWith('delete-')) {
       const entity = action.slice(7);
-      if (!window.confirm(entity === 'medications' ? 'Retire this medication schedule?' : 'Remove this entry?')) return;
+      if (!window.confirm(tr(entity === 'medications' ? 'Retire this medication schedule?' : 'Remove this entry?'))) return;
       await api(entity + '/' + id, 'DELETE');
       const [formId] = Object.entries(forms).find(([, [key]]) => key === entity);
       if (byId(formId).dataset.edit === id) cancelEdit(byId(formId));
     } else if (action === 'revoke') {
-      if (!window.confirm('Revoke this person’s profile access?')) return;
+      if (!window.confirm(tr('Revoke this person’s profile access?'))) return;
       await api('contacts/' + id + '/revoke', 'POST');
     } else if (action === 'request-checkin') {
       await api('checkins', 'POST');
@@ -1017,6 +1061,10 @@ document.addEventListener('click', event => {
 });
 
 initPreferences(() => {
+  notice(noticeMessage, byId('notice').hasAttribute('data-error'));
+  for (const id of Object.keys(forms)) renderFormButton(byId(id));
+  byId('review-invite').textContent = tr(reviewedInvite ? 'Accept invitation' : 'Review invitation');
+  byId('access-nav').textContent = byId('access-heading').textContent = tr(careTeam ? 'Care Circle' : 'People & access');
   stopReading();
   byId('read-today').textContent = tr('Read today aloud');
   byId('sound').textContent = tr(armed ? 'Alarm sound on' : 'Enable alarm sound');

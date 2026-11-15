@@ -13,8 +13,14 @@
   <a class="skip-link" href="#main">Skip to main content</a>
   <header class="topbar">
     <div class="topbar-inner">
-      <a class="brand" href="/" aria-label="CareCircle home"><img class="brand-icon" src="/favicon.png" width="38" height="38" alt=""> CareCircle</a>
-      <nav id="navigation" aria-label="Main navigation" hidden>
+      <a class="brand" href="/" aria-label="CareCircle home" data-i18n-label="CareCircle home"><img class="brand-icon" src="/favicon.png" width="38" height="38" alt=""> CareCircle</a>
+      <div class="display-settings">
+        <select id="language" aria-label="Language / भाषा"><option value="en">English</option><option value="hi" lang="hi">हिन्दी</option></select>
+        <button id="large-text" class="quiet" aria-pressed="false">Larger text</button>
+        <button id="theme" class="quiet" aria-pressed="false">Dark mode</button>
+        <button id="logout" class="quiet" data-i18n="Sign out" hidden>Sign out</button>
+      </div>
+      <nav id="navigation" aria-label="Main navigation" data-i18n-label="Main navigation" hidden>
         <button data-view="today" data-i18n="Today" aria-current="page">Today</button>
         <button data-view="schedule" data-i18n="Schedule">Schedule</button>
         <button data-view="refills" data-i18n="Refills">Refills</button>
@@ -22,11 +28,6 @@
         <button data-view="history" data-i18n="History">History</button>
         <button data-view="circle" id="access-nav">People &amp; access</button>
       </nav>
-      <div class="display-settings">
-        <select id="language" aria-label="Language / भाषा"><option value="en">English</option><option value="hi" lang="hi">हिन्दी</option></select>
-        <button id="large-text" class="quiet" aria-pressed="false">Larger text</button>
-        <button id="logout" class="quiet" data-i18n="Sign out" hidden>Sign out</button>
-      </div>
     </div>
   </header>
   <main id="main" tabindex="-1">
@@ -37,7 +38,7 @@
         <p>See today’s doses and appointments, and let someone in your care circle know when a check-in may help.</p>
       </div>
       <div class="card auth-card">
-        <div class="auth-switch" aria-label="Account access">
+        <div class="auth-switch" aria-label="Account access" data-i18n-label="Account access">
           <button class="quiet" type="button" data-auth="login-form" data-i18n="Sign in" aria-pressed="true">Sign in</button>
           <button class="quiet" type="button" data-auth="profile-form" data-i18n="Patient signup" aria-pressed="false">Patient signup</button>
           <button class="quiet" type="button" data-auth="account-form" data-i18n="Care-team signup" aria-pressed="false">Care-team signup</button>
@@ -242,13 +243,22 @@
               <h2>Handoff escalation</h2>
               <p>Choose who gets the first email and who takes over if no one claims the follow-up.</p>
               <p id="handoff-empty" hidden>Link two care-team members to set up a backup.</p>
+              <div id="handoff-saved" class="stack" hidden>
+                <div id="handoff-summary"></div>
+                <div class="actions">
+                  <button type="button" id="edit-handoff" class="quiet">Edit rule</button>
+                  <button type="button" id="disable-handoff" class="quiet">Disable rule</button>
+                </div>
+              </div>
               <form id="handoff-form" class="stack" hidden>
                 <label>Primary contact<select name="primary" id="handoff-primary" required></select></label>
                 <label>Backup contact<select name="backup" id="handoff-backup" required></select></label>
                 <label>Wait before notifying backup (minutes)<input name="wait" type="number" min="5" max="120" required value="15"></label>
-                <button class="primary">Save handoff rule</button>
+                <div class="actions">
+                  <button class="primary">Save handoff rule</button>
+                  <button type="button" id="cancel-handoff" class="quiet" hidden>Cancel</button>
+                </div>
               </form>
-              <button type="button" id="disable-handoff" class="quiet" hidden>Disable rule</button>
             </section>
             <section class="card"><h2>Reminder activity</h2><div id="delivery-list"></div></section>
           </div>
@@ -270,7 +280,7 @@
   <dialog id="passcode-dialog" aria-labelledby="passcode-title">
     <h2 id="passcode-title">Save this passcode</h2>
     <p id="passcode-context"></p>
-    <input id="passcode-value" readonly aria-label="Personal passcode">
+    <input id="passcode-value" readonly aria-label="Personal passcode" data-i18n-label="Personal passcode">
     <form method="dialog" class="actions">
       <button type="button" class="quiet" id="copy-code">Copy passcode</button><button class="primary">Done</button>
     </form>

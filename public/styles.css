@@ -12,10 +12,10 @@ button:disabled { cursor: wait; opacity: .65; }
 .skip-link { position: fixed; z-index: 3; top: 8px; left: 8px; padding: 10px 16px; background: var(--surface); transform: translateY(-160%); }
 .skip-link:focus { transform: none; }
 .topbar { position: sticky; z-index: 2; top: 0; border-bottom: 1px solid var(--line); background: var(--surface); }
-.topbar-inner { max-width: 1200px; min-height: 76px; margin: auto; padding: 12px 30px; display: flex; align-items: center; gap: 24px; }
+.topbar-inner { max-width: 1200px; min-height: 76px; margin: auto; padding: 10px 30px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 16px; }
 .brand { display: inline-flex; align-items: center; gap: 11px; text-decoration: none; font: 800 1.22rem "Inter", system-ui, sans-serif; letter-spacing: -.035em; white-space: nowrap; }
 .brand-icon { display: block; width: 38px; height: 38px; flex: 0 0 38px; }
-.display-settings { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
+.display-settings { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; justify-content: flex-end; }
 .display-settings select { width: auto; }
 #large-text[aria-pressed="true"] { background: var(--mint); }
 :root[data-large-text] { font-size: 118%; }
@@ -25,9 +25,9 @@ button:disabled { cursor: wait; opacity: .65; }
 .photo-form { margin-top: 8px; }
 .medication-photo { display: block; max-width: min(100%, 210px); max-height: 158px; border-radius: 12px; margin-top: 12px; border: 1px solid var(--line); object-fit: contain; background: white; }
 #change-error { color: #8b2826; }
-nav { display: flex; gap: 5px; margin-inline: auto; padding: 4px; border-radius: 14px; background: #edf3f7; }
+nav { grid-column: 1 / -1; display: flex; gap: 5px; padding: 4px; border-radius: 14px; background: #edf3f7; }
 nav button, .quiet, .primary { min-height: 47px; border-radius: 11px; padding: 9px 16px; font-weight: 700; border: 1px solid transparent; }
-nav button { color: var(--muted); background: transparent; }
+nav button { flex: 1 1 auto; min-width: 0; color: var(--muted); background: transparent; white-space: nowrap; }
 nav button[aria-current] { background: var(--surface); color: var(--green); border-color: #d4e2e8; box-shadow: var(--shadow); }
 .quiet { background: var(--surface); border-color: #cadce4; color: var(--green); }
 .primary { color: white; background: var(--green); }
@@ -119,7 +119,7 @@ p { color: var(--muted); }
 .refill-cards article > p + p { margin-top: 6px; }
 .access-panels { display: grid; gap: 16px; }
 .access-panels > .card > p + p { margin-top: 8px; }
-#disable-handoff { margin-top: 12px; }
+#handoff-summary { margin-bottom: 12px; }
 .request-response { min-width: min(230px, 100%); }
 #appointment-requests .row { align-items: start; flex-wrap: wrap; }
 #open-appointment, #no-linked-doctors, #today-request-status { margin-top: 12px; }
@@ -159,11 +159,10 @@ summary { cursor: pointer; font-weight: 700; min-height: 26px; }
 dialog { width: min(440px, calc(100% - 28px)); border: 1px solid var(--line); border-radius: 18px; padding: 23px; }
 dialog::backdrop { background: #19292399; }
 dialog p, dialog input { margin: 10px 0; }
-@media (max-width: 1200px) {
-  .topbar-inner { flex-wrap: wrap; justify-content: space-between; gap: 5px 12px; padding: 9px 15px; }
-  nav { order: 3; width: 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  nav button { padding-inline: 5px; font-size: .95rem; overflow-wrap: anywhere; }
-  .display-settings { justify-content: flex-end; }
+@media (max-width: 850px) {
+  .topbar-inner { padding: 9px 15px; }
+  nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  nav button { padding-inline: 5px; font-size: .95rem; white-space: normal; overflow-wrap: anywhere; }
   main { padding: 18px 15px 42px; }
   .auth-layout, .columns, .today-grid, .schedule-layout { grid-template-columns: 1fr; gap: 13px; }
   .auth-layout { align-items: start; min-height: auto; }
@@ -180,9 +179,29 @@ dialog p, dialog input { margin: 10px 0; }
   .featured { min-height: 158px; }
   .hero-action { width: 100%; }
 }
-@media (max-width: 360px) {
+@media (max-width: 650px) {
   .topbar { position: static; }
-  nav button { font-size: 1rem; }
+  .topbar-inner { grid-template-columns: minmax(0, 1fr); }
+  .display-settings { justify-content: flex-start; }
+  .display-settings > * { padding-inline: 9px; }
+}
+@media screen {
+  :root[data-theme="dark"] { color-scheme: dark; --ink: #e7f2f5; --muted: #afc2cc; --paper: #101b22; --surface: #192a34; --line: #395260; --green: #a1e6ce; --mint: #203e37; --cream: #493521; --shadow: 0 3px 12px #0003; }
+  [data-theme="dark"] :is(nav, .auth-switch, .patient-card, .week-plan section) { background: #213541; }
+  [data-theme="dark"] :is(.quiet, nav button[aria-current], .auth-switch [aria-pressed], .patient-access, .patient-card) { border-color: var(--line); }
+  [data-theme="dark"] :is(nav button[aria-current], .auth-switch [aria-pressed="true"]) { background: var(--surface); }
+  [data-theme="dark"] .primary { color: #102e26; }
+  [data-theme="dark"] .appointment { background: #233948; border-color: var(--line); }
+  [data-theme="dark"] .patient-avatar { color: var(--green); background: var(--mint); }
+  [data-theme="dark"] :is(input:not([type=checkbox]), select, textarea, dialog) { background: var(--paper); color: var(--ink); border-color: #587381; }
+  [data-theme="dark"] .pill { background: #2e4256; color: #dbeaff; }
+  [data-theme="dark"] .pill:is([data-status="Taken"], [data-status="Claimed"], [data-status="Checked in"]) { background: var(--mint); color: var(--green); }
+  [data-theme="dark"] :is(.pill[data-status="Unconfirmed"], .pill[data-status="Due"], .pill[data-status="Failed"], .alarm) { background: var(--cream); color: #ffe2b4; }
+  [data-theme="dark"] :is(.patient-card[data-priority="pending"], .refill-cards article[data-low]) { background: var(--cream); border-color: #906732; }
+  [data-theme="dark"] .patient-card[data-priority="pending"] strong { color: #ffe2b4; }
+  [data-theme="dark"] :is(.patient-card[data-priority="overdue"], #notice[data-error]) { background: #46292e; border-color: #8b5154; }
+  [data-theme="dark"] :is(.patient-card[data-priority="overdue"] strong, #notice[data-error], #change-error) { color: #ffc6c4; }
+  [data-theme="dark"] :focus-visible { outline-color: #90d9bf; }
 }
 @media print {
   .topbar, .skip-link, #notice, #patient-access, #back-patients, #alarm, #history > :not(#appointment-report), #print-report { display: none !important; }
