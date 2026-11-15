@@ -8,10 +8,16 @@ import { database } from './database.mjs';
 const hosted = process.env.RENDER === 'true';
 const port = Number(process.env.PORT || 3000);
 const path = process.env.DATABASE_PATH || '.local/carecircle.sqlite';
-const appUrl = process.env.APP_URL?.replace(/\/$/, '');
+const appUrl = process.env.APP_URL?.trim().replace(/\/$/, '');
 const backendUrl = process.env.RENDER_EXTERNAL_URL || 'http://localhost:' + port;
 if (hosted && (!process.env.PROFILE_SETUP_KEY || !process.env.DATABASE_URL || !appUrl)) {
   throw new Error('Set PROFILE_SETUP_KEY, DATABASE_URL, and APP_URL before starting on Render.');
+}
+if (hosted) {
+  const origin = new URL(appUrl);
+  if (origin.protocol !== 'https:' || origin.origin !== appUrl) {
+    throw new Error('Set APP_URL to the Vercel production HTTPS origin, without a path.');
+  }
 }
 let DB;
 if (process.env.DATABASE_URL) {
@@ -49,12 +55,20 @@ const server = createServer(async (incoming, outgoing) => {
   try {
     const base = hosted ? backendUrl : 'http://' + incoming.headers.host;
     const url = new URL(incoming.url, base);
-    if (url.pathname === '/healthz') {
-      await env.DB.prepare('SELECT 1').bind().first();
-      outgoing.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-store' }).end('ok');
+    if (url.pathname === '/healthz' || url.pathname === '/api/health') {
+      if (!['GET', 'HEAD'].includes(incoming.method)) return outgoing.writeHead(405, { allow: 'GET, HEAD' }).end();
+      let ready = true;
+      try { await env.DB.prepare('SELECT 1').bind().first(); }
+      catch { ready = false; }
+      outgoing.writeHead(ready ? 200 : 503, { ...securityHeaders, 'content-type': 'application/json', 'cache-control': 'no-store' });
+      outgoing.end(incoming.method === 'HEAD' ? undefined : JSON.stringify({ ok: ready }));
       return;
     }
     if (!url.pathname.startsWith('/api/')) {
+      if (hosted) {
+        if (url.pathname === '/') return outgoing.writeHead(302, { location: appUrl }).end();
+        return outgoing.writeHead(404).end();
+      }
       const asset = Object.hasOwn(assets, url.pathname) && assets[url.pathname];
       if (!asset || !['GET', 'HEAD'].includes(incoming.method)) return outgoing.writeHead(404).end();
       const [filename, type] = asset;
