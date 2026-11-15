@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f8f2">
+  <title>CareCircle | Daily care</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/" aria-label="CareCircle home"><span class="brand-icon" aria-hidden="true">✚</span> CareCircle</a>
+      <nav id="navigation" aria-label="Main navigation" hidden>
+        <button data-view="today" aria-current="page">Today</button>
+        <button data-view="schedule">Schedule</button>
+        <button data-view="circle">Care Circle</button>
+      </nav>
+      <button id="logout" class="quiet" hidden>Sign out</button>
+    </div>
+  </header>
+  <main>
+    <div id="notice" role="status" aria-live="polite"></div>
+    <section id="auth" class="auth-layout" hidden>
+      <div class="auth-intro">
+        <span class="brand-icon large" aria-hidden="true">✚</span>
+        <h1>Daily care, together.</h1>
+        <p>See what’s due today, keep track of appointments, and ask your care circle to check in when a dose goes unconfirmed.</p>
+      </div>
+      <div class="card auth-card">
+        <form id="login-form">
+          <h2>Sign in</h2>
+          <label>Personal passcode<input name="passcode" required autocomplete="current-password" spellcheck="false"></label>
+          <button class="primary">Open care profile</button>
+        </form>
+        <details>
+          <summary>Create a care profile</summary>
+          <form id="profile-form">
+            <label>Name<input name="name" required maxlength="100" autocomplete="name"></label>
+            <label>Email <span>(optional)</span><input name="email" type="email" autocomplete="email"></label>
+            <label>Setup key <span>(if provided)</span><input name="setupKey" type="password" autocomplete="off"></label>
+            <button class="primary">Create profile</button>
+          </form>
+        </details>
+      </div>
+    </section>
+    <section id="dashboard" hidden>
+      <section id="today" class="view">
+        <div class="heading">
+          <div><p class="eyebrow" id="date"></p><h1 id="welcome">Today</h1></div>
+          <button id="sound" class="quiet" aria-pressed="false">Enable sound</button>
+        </div>
+        <div id="alarm" class="alarm" role="alert" hidden></div>
+        <div class="today-grid">
+          <section class="card featured" aria-labelledby="next-heading">
+            <div class="section-icon" aria-hidden="true">◷</div>
+            <h2 id="next-heading">Next dose</h2><div id="next-dose"></div>
+          </section>
+          <section class="card appointment" aria-labelledby="appointment-heading">
+            <div class="section-icon" aria-hidden="true">▦</div>
+            <h2 id="appointment-heading">Next appointment</h2><div id="next-appointment"></div>
+          </section>
+          <section class="card dose-card" aria-labelledby="doses-heading">
+            <h2 id="doses-heading">Today’s doses</h2><div id="today-doses"></div>
+          </section>
+          <section class="card followup-card" aria-labelledby="followup-heading">
+            <h2 id="followup-heading">Care follow-ups</h2><div id="followups"></div>
+          </section>
+        </div>
+        <details class="card history"><summary>Recent dose history</summary><div id="history-list"></div></details>
+        <section class="card demo" id="demo-panel" hidden>
+          <div><h2>Demo dose</h2><p>Schedules a synthetic dose in 20 seconds. The demo check-in window is <span id="demo-grace">1 minute</span>.</p></div>
+          <button id="add-demo" class="quiet">Schedule demo dose</button>
+        </section>
+      </section>
+      <section id="schedule" class="view" hidden>
+        <div class="heading"><div><p class="eyebrow">Care plan</p><h1>Schedule</h1></div><p class="muted">Times are shown in India Standard Time.</p></div>
+        <div class="columns">
+          <section class="card">
+            <h2>Medications</h2>
+            <div id="medication-list"></div>
+            <form id="medication-form" class="stack">
+              <label>Medication name<input name="name" required maxlength="100"></label>
+              <label>Amount as prescribed<input name="amount" required maxlength="100"></label>
+              <label>Daily time (IST)<input name="time" type="time" required></label>
+              <div class="actions"><button class="primary">Add medication</button><button type="button" class="quiet cancel" hidden>Cancel edit</button></div>
+            </form>
+          </section>
+          <section class="card">
+            <h2>Appointments</h2>
+            <div id="appointment-list"></div>
+            <form id="appointment-form" class="stack">
+              <label>Appointment title<input name="name" required maxlength="100"></label>
+              <label>Location <span>(optional)</span><input name="location" maxlength="100"></label>
+              <label>Date and time (IST)<input name="due" type="datetime-local" required></label>
+              <div class="actions"><button class="primary">Add appointment</button><button type="button" class="quiet cancel" hidden>Cancel edit</button></div>
+            </form>
+          </section>
+        </div>
+      </section>
+      <section id="circle" class="view" hidden>
+        <div class="heading"><div><p class="eyebrow">Shared care</p><h1>Care Circle</h1></div></div>
+        <div id="circle-helper" class="card" hidden><h2>Caregiver access</h2><p>Use Today to see and claim follow-ups. The profile owner manages contacts and invitations.</p></div>
+        <div id="circle-owner" class="columns" hidden>
+          <section class="card">
+            <h2>Family and caregivers</h2>
+            <div id="contact-list"></div>
+            <form id="contact-form" class="stack">
+              <label>Name<input name="name" required maxlength="100"></label>
+              <label>Email<input name="email" type="email" maxlength="254"></label>
+              <label>Phone <span>(optional)</span><input name="phone" type="tel" maxlength="25" placeholder="+91…"></label>
+              <label class="check"><input name="alerts" type="checkbox" checked> Receive check-in and appointment alerts</label>
+              <label class="check" id="invite-label"><input name="invite" type="checkbox" checked> Create an individual sign-in passcode</label>
+              <div class="actions"><button class="primary">Add contact</button><button type="button" class="quiet cancel" hidden>Cancel edit</button></div>
+            </form>
+          </section>
+          <section class="card"><h2>Reminder activity</h2><div id="delivery-list"></div></section>
+        </div>
+      </section>
+    </section>
+  </main>
+  <dialog id="passcode-dialog" aria-labelledby="passcode-title">
+    <h2 id="passcode-title">Save this passcode</h2>
+    <p id="passcode-context"></p>
+    <input id="passcode-value" readonly aria-label="Personal passcode">
+    <form method="dialog" class="actions">
+      <button type="button" class="quiet" id="copy-code">Copy passcode</button><button class="primary">Done</button>
+    </form>
+  </dialog>
+</body>
+</html>

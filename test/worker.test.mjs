@@ -1,0 +1,73 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import worker, { remind } from '../src/worker.ts';
+import { database } from '../scripts/database.mjs';
+
+test('passcodes, scoped access, reminder deduplication and handoff', async (context) => {
+  context.mock.timers.enable({ apis: ['Date'] });
+  let DB;
+  if (process.env.TEST_POSTGRES) {
+    const { PGlite } = await import('@electric-sql/pglite');
+    const { postgresQueries } = await import('../scripts/postgres.mjs');
+    const pg = new PGlite();
+    context.after(() => pg.close());
+    await pg.exec(await readFile(new URL('../migrations/0001_initial.sql', import.meta.url), 'utf8'));
+    const wrap = db => ({ query: async (sql, args) => {
+      const result = await db.query(sql, args);
+      return { ...result, rowCount: result.affectedRows ?? result.rows.length };
+    } });
+    DB = postgresQueries(operation => operation(wrap(pg)), operation => pg.transaction(tx => operation(wrap(tx))));
+  } else {
+    DB = database();
+  }
+  const env = { DB, DEMO_MINUTES: '1' };
+  async function api(path, body, cookie, method = body ? 'POST' : 'GET') {
+    const response = await worker.fetch(new Request(`https://care.test/api/${path}`, {
+      method, headers: { ...(body && { 'content-type': 'application/json' }), ...(cookie && { cookie }) },
+      body: body && JSON.stringify(body)
+    }), env);
+    return { status: response.status, data: await response.json(), cookie: response.headers.get('set-cookie')?.split(';')[0] };
+  }
+  const owner = await api('profiles', { name: 'Asha', email: 'elder@example.com' });
+  assert.equal(owner.status, 201);
+  const invite = await api('contacts', { name: 'Dev', email: 'dev@example.com', alerts: true, invite: true }, owner.cookie);
+  const helper = await api('login', { passcode: invite.data.passcode });
+  assert.equal(helper.status, 200);
+  const other = await api('profiles', { name: 'Other' });
+  const due = Date.now() + 3000;
+  const medication = await api('medications', { name: 'Demo tablet', amount: '1 tablet', time: '08:00' }, helper.cookie);
+  assert.equal(medication.status, 201);
+  const appointment = await api('appointments', { name: 'Check-in', due: due + 3_600_000 }, helper.cookie);
+  assert.equal(appointment.status, 201);
+  const inviteOnly = await api('contacts', { name: 'Invite only', invite: true }, owner.cookie);
+  assert.equal((await api('contacts/' + inviteOnly.data.id, { name: 'Renamed' }, owner.cookie, 'PATCH')).status, 200);
+  const demo = await api('demo', { due }, owner.cookie);
+  assert.equal(demo.status, 201);
+  const id = demo.data.id;
+  assert.equal((await api(`doses/${id}/claim`, {}, other.cookie)).status, 404);
+  const sent = [];
+  const send = async (message) => { sent.push(message); return { state: 'accepted' }; };
+  await remind(env, due - 1000, send);
+  await remind(env, due - 1000, send);
+  assert.equal(sent.filter(m => m.to === 'elder@example.com' && m.kind === 'upcoming').length, 1);
+  assert.equal(sent.filter(m => m.to === 'dev@example.com' && m.kind === 'appointment').length, 1);
+  await remind(env, due + 61_000, send);
+  await remind(env, due + 61_000, send);
+  assert.equal(sent.filter(m => m.to === 'dev@example.com' && m.kind === 'unconfirmed').length, 1);
+  context.mock.timers.setTime(due + 61_000);
+  assert.equal((await api(`doses/${id}/claim`, {}, helper.cookie)).status, 200);
+  assert.equal((await api(`doses/${id}/claim`, {}, owner.cookie)).status, 409);
+  assert.equal((await api(`doses/${id}/taken`, {}, owner.cookie)).status, 200);
+  const state = await api('state', undefined, owner.cookie);
+  assert.equal(state.data.doses.find(d => d.id === id).claimed_by, 'Dev');
+  assert.ok(state.data.doses.find(d => d.id === id).taken_at);
+  const next = await api('demo', {}, owner.cookie);
+  context.mock.timers.setTime(next.data.due + 1000);
+  assert.equal((await api(`doses/${next.data.id}/taken`, {}, owner.cookie)).status, 200);
+  const sendsBefore = sent.length;
+  await remind(env, next.data.due + 61_000, send);
+  assert.equal(sent.length, sendsBefore);
+  assert.equal((await api(`contacts/${invite.data.id}/revoke`, {}, owner.cookie)).status, 200);
+  assert.equal((await api('state', undefined, helper.cookie)).status, 401);
+});

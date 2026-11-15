@@ -1,0 +1,17 @@
+CREATE TABLE profiles (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL, demo INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE members (id TEXT PRIMARY KEY, profile TEXT NOT NULL REFERENCES profiles(id), name TEXT NOT NULL, role TEXT NOT NULL, pass TEXT UNIQUE NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE sessions (token TEXT PRIMARY KEY, member TEXT NOT NULL REFERENCES members(id), expires BIGINT NOT NULL);
+CREATE TABLE attempts (address TEXT PRIMARY KEY, bucket INTEGER NOT NULL, count INTEGER NOT NULL);
+CREATE TABLE contacts (id TEXT PRIMARY KEY, profile TEXT NOT NULL REFERENCES profiles(id), name TEXT NOT NULL, email TEXT NOT NULL, phone TEXT NOT NULL, alerts INTEGER NOT NULL, member TEXT REFERENCES members(id));
+CREATE INDEX contacts_profile ON contacts(profile);
+CREATE TABLE medications (id TEXT PRIMARY KEY, profile TEXT NOT NULL REFERENCES profiles(id), name TEXT NOT NULL, amount TEXT NOT NULL, time TEXT NOT NULL, effective BIGINT NOT NULL, active INTEGER NOT NULL DEFAULT 1);
+CREATE INDEX medications_profile ON medications(profile);
+CREATE TABLE appointments (id TEXT PRIMARY KEY, profile TEXT NOT NULL REFERENCES profiles(id), name TEXT NOT NULL, location TEXT NOT NULL, due BIGINT NOT NULL);
+CREATE INDEX appointments_due ON appointments(due);
+CREATE INDEX appointments_profile ON appointments(profile);
+CREATE TABLE doses (id TEXT PRIMARY KEY, profile TEXT NOT NULL REFERENCES profiles(id), medication TEXT REFERENCES medications(id), name TEXT NOT NULL, amount TEXT NOT NULL, due BIGINT NOT NULL, demo INTEGER NOT NULL DEFAULT 0, taken_at BIGINT, taken_by TEXT, claimed_by TEXT, claimed_at BIGINT, cancelled INTEGER NOT NULL DEFAULT 0);
+CREATE UNIQUE INDEX dose_occurrence ON doses(medication, due);
+CREATE INDEX doses_due ON doses(due);
+CREATE INDEX doses_profile_due ON doses(profile, due);
+CREATE TABLE deliveries (profile TEXT NOT NULL REFERENCES profiles(id), event TEXT NOT NULL, kind TEXT NOT NULL, recipient TEXT NOT NULL, channel TEXT NOT NULL, state TEXT NOT NULL, attempted BIGINT NOT NULL, attempts INTEGER NOT NULL, PRIMARY KEY(event, kind, recipient, channel));
+CREATE INDEX deliveries_profile ON deliveries(profile, attempted);

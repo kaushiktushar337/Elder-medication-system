@@ -1,0 +1,16 @@
+{
+  "name": "carecircle",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env scripts/server.mjs",
+    "start": "node scripts/server.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "pg": "8.23.1"
+  }
+}
