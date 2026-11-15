@@ -43,6 +43,9 @@ const env = {
 const assets = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/js/app.js': ['js/app.js', 'text/javascript; charset=utf-8'],
+  '/js/appointments.js': ['js/appointments.js', 'text/javascript; charset=utf-8'],
+  '/js/medication-photo.js': ['js/medication-photo.js', 'text/javascript; charset=utf-8'],
+  '/js/view-helpers.js': ['js/view-helpers.js', 'text/javascript; charset=utf-8'],
   '/js/language.js': ['js/language.js', 'text/javascript; charset=utf-8'],
   '/js/i18n/hi.js': ['js/i18n/hi.js', 'text/javascript; charset=utf-8'],
   '/favicon.png': ['favicon.png', 'image/png'],

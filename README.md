@@ -8,7 +8,10 @@ CareCircle is a hackathon demo for older adults and their care circles. It combi
 public/
   index.html           Browser entry point
   js/
-    app.js             Dashboard rendering and interactions
+    app.js             Dashboard state, navigation, and interactions
+    appointments.js    Appointment views and role-specific actions
+    medication-photo.js Image resizing before upload
+    view-helpers.js    Shared date formatting and escaped markup
     language.js        Language, text-size, and theme preferences
     i18n/hi.js         Hindi interface translations
   css/styles.css       Responsive layouts and themes
@@ -17,7 +20,7 @@ src/
   server.mjs           Node HTTP server and reminder timer
   http/router.ts       Request validation, access checks, and API routing
   auth/                Password hashing and session handling
-  features/            Appointments, reminders, and refill logic
+  features/            Dashboard data, medications, care circles, follow-ups, and reminders
   db/                  SQLite/PostgreSQL adapters and migration loader
   core.ts              Shared time constants and small API/query helpers
 migrations/            Ordered SQL schema changes

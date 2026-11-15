@@ -1,24 +1,9 @@
+import { renderAppointments, todayAppointment } from './appointments.js';
+import { resizeMedicationPhoto } from './medication-photo.js';
+import { button, controls, date, dayTime, empty, label, row, safe, time } from './view-helpers.js';
 import { initPreferences, inHindi, locale, tr } from './language.js';
 
 const byId = id => document.getElementById(id);
-const timeOptions = { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit' };
-const dateOptions = { timeZone: 'Asia/Kolkata', weekday: 'long', day: 'numeric', month: 'long' };
-const formatters = new Map();
-function format(value, options) {
-  const language = locale();
-  if (!formatters.has(language)) {
-    formatters.set(language, new Map([timeOptions, dateOptions].map(option => [option, new Intl.DateTimeFormat(language, option)])));
-  }
-  return formatters.get(language).get(options).format(value);
-}
-const time = value => format(value, timeOptions);
-const date = value => format(value, dateOptions);
-const dayTime = value => date(value) + ' · ' + time(value);
-const safe = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
-const label = value => safe(tr(value));
-const empty = message => '<p>' + safe(message) + '</p>';
-const button = (action, id, label, kind = 'quiet') => '<button class="' + kind + '" data-action="' + action + '" data-id="' + safe(id) + '">' + safe(tr(label)) + '</button>';
-const row = (name, detail, actions = '') => '<div class="row"><div><strong>' + safe(name) + '</strong><p>' + safe(detail) + '</p></div><div class="actions">' + actions + '</div></div>';
 let state;
 let activePatient = '';
 let editingHandoff = false;
@@ -270,31 +255,6 @@ function loadVisiblePhotos() {
   }
 }
 
-async function resizeMedicationPhoto(file) {
-  if (!file.type.startsWith('image/') || file.size > 12_000_000) throw new Error('Choose an image under 12 MB.');
-  const source = URL.createObjectURL(file);
-  try {
-    const image = new Image();
-    image.src = source;
-    await image.decode();
-    const scale = Math.min(1, 620 / Math.max(image.width, image.height));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(image.width * scale));
-    canvas.height = Math.max(1, Math.round(image.height * scale));
-    const context = canvas.getContext('2d', { alpha: false });
-    context.fillStyle = '#ffffff';
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.drawImage(image, 0, 0, canvas.width, canvas.height);
-    for (const quality of [.82, .65, .48]) {
-      const jpeg = canvas.toDataURL('image/jpeg', quality).split(',')[1];
-      if (jpeg && jpeg.length <= 166_000) return jpeg;
-    }
-    throw new Error('The compressed photo is still too large.');
-  } finally {
-    URL.revokeObjectURL(source);
-  }
-}
-
 function stopReading() {
   if (!speech) return;
   const current = speech;
@@ -438,11 +398,6 @@ function renderReport(current) {
       : empty(tr('No confirmed or unconfirmed dose records in this period.'))));
 }
 
-function todayAppointment() {
-  const upcoming = state.appointments.find(item => item.due > now());
-  return upcoming?.due < state.start + dayLength ? upcoming : null;
-}
-
 function renderToday() {
   const current = now();
   const today = todaysDoses();
@@ -474,7 +429,7 @@ function renderToday() {
   show('next-appointment', appointment
     ? '<p class="appointment-date">' + safe(dayTime(appointment.due)) + '</p><p class="metric">' + safe(appointment.name) + '</p>' + (appointment.location ? empty(appointment.location) : '')
     : empty(tr('No upcoming appointments.')));
-  const sameDay = state.me.owner && todayAppointment();
+  const sameDay = state.me.owner && todayAppointment(state, now());
   const pendingChange = sameDay && state.requests.some(item => item.id === sameDay.id && item.proposal_state === 'pending');
   byId('open-appointment').textContent = tr(sameDay ? pendingChange ? 'Review change request' : 'Request a change'
     : state.me.canRequestAppointment ? 'Request an appointment' : 'Open appointments');
@@ -494,7 +449,6 @@ function renderToday() {
   if (activeView === 'today') loadVisiblePhotos();
 }
 
-const controls = (entity, item) => button('edit-' + entity, item.id, 'Edit') + button('delete-' + entity, item.id, entity === 'medications' ? 'Retire' : 'Remove');
 const deliveryLabels = { accepted: 'Email sent', sending: 'Sending', failed: 'Failed', retry: 'Retry pending', review: 'Check delivery logs', unconfigured: 'Provider not configured', suppressed: 'Suppressed' };
 const reminderLabels = { upcoming: 'Upcoming dose', unconfirmed: 'Unconfirmed dose', appointment: 'Appointment', appointment_request: 'Appointment request', appointment_change: 'Alternate appointment time', checkin: 'Requested check-in', checkin_backup: 'Check-in backup', dose_backup: 'Dose follow-up backup', refill: 'Refill reminder' };
 
@@ -555,60 +509,15 @@ function renderHandoff() {
   if (selections) [form.elements.primary.value, form.elements.backup.value, form.elements.wait.value] = selections;
 }
 
-function visitForm(item, action, fields, label) {
-  return '<form class="visit-form" data-request="' + safe(item.id) + '" data-mode="' + action + '">' + fields + '<button class="primary">' + safe(tr(label)) + '</button></form>';
-}
-
-function visitDetails(item) {
-  const patient = state.me.owner;
-  const doctor = state.me.relationship === 'Doctor';
-  const future = item.status === 'scheduled' && item.due > now();
-  const completed = item.status === 'scheduled' && !future;
-  const questions = safe(tr('Questions for the doctor'));
-  const summary = safe(tr('Visit summary'));
-  const questionsField = '<label>' + questions + '<textarea name="questions" rows="3" maxlength="1000">' + safe(item.questions) + '</textarea></label>';
-  const parts = [];
-  if (item.questions) parts.push('<p class="visit-notes"><strong>' + questions + '</strong><br>' + safe(item.questions) + '</p>');
-  if (patient && (future || item.status === 'pending')) parts.push(visitForm(item, 'questions', questionsField, 'Save questions'));
-  if (item.proposal_state) {
-    const decision = item.proposal_state === 'pending' ? (future ? 'Awaiting doctor’s reply' : 'Proposal expired') : item.proposal_state === 'accepted' ? 'Alternate time accepted' : 'Alternate time declined';
-    parts.push(empty(tr(decision) + ' · ' + dayTime(item.proposed_due)));
-    if (item.proposal_reason) parts.push('<p class="visit-notes"><strong>' + safe(tr('Reason for the change')) + '</strong><br>' + safe(item.proposal_reason) + '</p>');
-  }
-  if (patient && future) parts.push(button('change-visit', item.id, 'Request a change'));
-  if (doctor && future && item.proposal_state === 'pending') {
-    const key = item.id + '|' + item.proposed_due;
-    parts.push('<div class="actions">' + button('accept-proposal', key, 'Accept alternate time', 'primary') + button('decline-proposal', key, 'Decline alternate time') + '</div>');
-  }
-  if (item.visit_summary) parts.push('<p class="visit-notes"><strong>' + summary + '</strong><br>' + safe(item.visit_summary) + '</p>');
-  if (doctor && completed) parts.push(visitForm(item, 'summary', '<label>' + summary + '<textarea name="summary" rows="4" maxlength="1500" required>' + safe(item.visit_summary) + '</textarea></label>', 'Save visit summary'));
-  return parts.join('');
-}
-
-function renderSchedule() {
+function renderMedicationList() {
   show('medication-list', state.medications.map(item => '<article class="medication-entry">' + row(item.name, item.amount + ' · ' + item.time + ' IST · ' + (item.interval_days === 1 ? tr('Daily') : tr('Every {days} days').replace('{days}', item.interval_days))
     + (item.updated_by ? ' · ' + tr('Updated by') + ' ' + item.updated_by + ' · ' + tr('Effective') + ' ' + dayTime(Math.max(item.effective, item.start_day || 0)) : ''), controls('medications', item)) + photoMarkup(item)
     + '<form class="photo-form" data-photo="' + safe(item.id) + '"><label>' + safe(tr('Medication photo')) + '<input type="file" name="photo" accept="image/jpeg,image/png,image/webp,image/avif,image/heic" required></label>'
     + '<div class="actions"><button class="quiet">' + safe(tr('Add or replace photo')) + '</button>'
     + (item.photo_revision ? '<button type="button" class="quiet" data-action="remove-photo" data-id="' + safe(item.id) + '">' + safe(tr('Remove photo')) + '</button>' : '') + '</div></form></article>').join('') || empty(tr('No medications yet.')));
-  const canRequest = state.me.canRequestAppointment ?? state.me.owner;
-  byId('appointment-form').hidden = state.me.relationship !== 'Doctor';
-  byId('request-appointment-form').hidden = !canRequest || !state.doctors.length;
-  byId('no-linked-doctors').hidden = !canRequest || Boolean(state.doctors.length);
-  byId('no-linked-doctors').textContent = tr(state.me.owner ? 'Invite your doctor from People & access before requesting an appointment.' : 'Ask the patient to link their doctor before requesting an appointment.');
-  show('doctor-picker', '<option value="">' + safe(tr('Choose doctor')) + '</option>' + state.doctors.map(doctor => '<option value="' + safe(doctor.id) + '">' + safe(doctor.name) + '</option>').join(''));
-  const todayVisit = todayAppointment();
-  const awaitingChange = todayVisit && state.requests.find(item => item.id === todayVisit.id && item.proposal_state === 'pending');
-  show('today-request-status', state.me.owner ? awaitingChange ? empty(tr('Change requested') + ' · ' + dayTime(awaitingChange.proposed_due))
-    : !todayVisit ? state.requests.filter(item => item.status === 'pending').slice(0, 2).map(item => empty(item.name + ' · ' + tr('Awaiting response') + ' · ' + item.doctor_name)).join('') : '' : '');
-  show('appointment-requests', state.requests.map(item => {
-    const description = item.doctor_name + ' · ' + (item.status === 'scheduled' ? tr('Scheduled') + ' · ' + dayTime(item.due) + (item.location ? ' · ' + item.location : '') : tr(item.status === 'pending' ? 'Awaiting response' : item.status));
-    let actions = item.status === 'pending' && state.me.owner ? button('cancel-request', item.id, 'Cancel request') : '';
-    if (item.status === 'pending' && state.me.relationship === 'Doctor') actions = '<form class="request-response" data-request="' + safe(item.id) + '"><label>' + safe(tr('Appointment time (IST)')) + '<input name="due" type="datetime-local" required></label><label>' + safe(tr('Location')) + '<input name="location" maxlength="100"></label><button class="primary">' + safe(tr('Accept and schedule')) + '</button></form>' + button('decline-request', item.id, 'Decline');
-    return '<article class="visit-entry">' + row(item.name, description, actions) + visitDetails(item) + '</article>';
-  }).join(''));
-  const standalone = state.appointments.filter(item => !state.requests.some(request => request.id === item.id));
-  show('appointment-list', standalone.map(item => row(item.name, tr('Scheduled') + ' · ' + dayTime(item.due) + (item.location ? ' · ' + item.location : ''), state.me.relationship === 'Doctor' && !item.status && (!item.doctor || item.doctor === state.me.id) ? controls('appointments', item) : state.me.owner && item.due > now() ? button('change-visit', item.id, 'Request a change') : '')).join('') || (state.requests.length ? '' : empty(tr('No appointments scheduled.'))));
+}
+
+function renderWeekPlan() {
   show('week-plan', Array.from({ length: 7 }, (_, index) => {
     const day = state.start + index * dayLength;
     const schedule = state.medications.filter(item => {
@@ -631,7 +540,9 @@ function render() {
   byId('medication-search-help').hidden = !canSearchMedicines;
   byId('circle-owner').hidden = !state.me.owner;
   byId('circle-helper').hidden = state.me.owner;
-  renderSchedule();
+  renderMedicationList();
+  renderWeekPlan();
+  renderAppointments(state, now(), show);
   renderRefills();
   renderHandoff();
   show('access-list', state.contacts.filter(item => item.account && !item.revoked).map(item =>
@@ -833,7 +744,7 @@ function openChangeForm(visit) {
 byId('cancel-change').addEventListener('click', () => byId('change-dialog').close());
 byId('open-appointment').addEventListener('click', () => {
   if (!state) return;
-  const visit = state.me.owner && todayAppointment();
+  const visit = state.me.owner && todayAppointment(state, now());
   if (visit && !state.requests.some(item => item.id === visit.id && item.proposal_state === 'pending')) {
     openChangeForm(visit);
     return;

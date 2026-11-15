@@ -42,7 +42,8 @@ test('HTTP server protects sessions, serves security headers and handles concurr
     assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
     assert.equal(response.headers.get('x-frame-options'), 'DENY');
     assert.match(await response.text(), /CareCircle/);
-    for (const asset of ['/js/app.js', '/js/language.js', '/js/i18n/hi.js', '/css/styles.css']) {
+    for (const asset of ['/js/app.js', '/js/appointments.js', '/js/medication-photo.js', '/js/view-helpers.js',
+      '/js/language.js', '/js/i18n/hi.js', '/css/styles.css']) {
       const assetResponse = await request(asset);
       assert.equal(assetResponse.status, 200, asset + ' must be served after the folder restructure');
       assert.ok((await assetResponse.text()).length > 0);

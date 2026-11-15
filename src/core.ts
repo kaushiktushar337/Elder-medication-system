@@ -10,3 +10,4 @@ export const token = () => uuid().replaceAll('-', '');
 export const json = (body, status = 200, headers = {}) => Response.json(body, { status, headers: { 'cache-control': 'no-store', ...headers } });
 export const error = (message, status = 400) => json({ error: message }, status);
 export const text = (value, max = 100) => typeof value === 'string' ? value.trim().slice(0, max) : '';
+export const uniqueViolation = error => error?.code === '23505' || error?.errcode === 2067;
