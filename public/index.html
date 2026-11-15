@@ -16,6 +16,9 @@
       <nav id="navigation" aria-label="Main navigation" hidden>
         <button data-view="today" aria-current="page">Today</button>
         <button data-view="schedule">Schedule</button>
+        <button data-view="refills">Refills</button>
+        <button data-view="appointments">Appointments</button>
+        <button data-view="history">History</button>
         <button data-view="circle" id="access-nav">People &amp; access</button>
       </nav>
       <button id="logout" class="quiet" hidden>Sign out</button>
@@ -118,7 +121,7 @@
           <section class="card appointment" aria-labelledby="appointment-heading">
             <h2 id="appointment-heading">Next appointment</h2>
             <div id="next-appointment"></div>
-            <button id="open-appointment" class="quiet" data-view="schedule" hidden>Request an appointment</button>
+            <button id="open-appointment" class="quiet" data-view="appointments">Open appointments</button>
             <div id="today-request-status"></div>
           </section>
           <section class="card dose-card" aria-labelledby="doses-heading">
@@ -135,7 +138,10 @@
             <div id="followups"></div>
           </section>
         </div>
-        <details class="card history"><summary>Recent dose history</summary><div id="history-list"></div></details>
+      </section>
+      <section id="history" class="view" hidden>
+        <div class="heading"><h1>History</h1></div>
+        <section class="card"><h2>Recent doses</h2><div id="history-list"></div></section>
         <details class="card history" id="appointment-report">
           <summary>Seven-day appointment summary</summary>
           <div id="report-content"></div>
@@ -144,12 +150,26 @@
       </section>
       <section id="schedule" class="view" hidden>
         <div class="heading"><div><p class="eyebrow">Care plan</p><h1>Schedule</h1></div><p class="muted">Times are shown in India Standard Time.</p></div>
-        <div class="columns">
+        <div class="schedule-layout">
           <section class="card">
             <h2>Medications</h2>
             <div id="medication-list"></div>
             <form id="medication-form" class="stack">
-              <label>Medication name<input name="name" required maxlength="100"></label>
+              <label>Medication name<input name="name" id="medication-name" required maxlength="100" autocomplete="off" aria-describedby="medication-search-help"></label>
+              <p id="medication-search-help" hidden>Search by generic name or type the name as prescribed.</p>
+              <datalist id="medicine-suggestions">
+                <option value="Amlodipine"><option value="Amoxicillin"><option value="Apixaban">
+                <option value="Aspirin"><option value="Atorvastatin"><option value="Bisoprolol">
+                <option value="Cetirizine"><option value="Clopidogrel"><option value="Dapagliflozin">
+                <option value="Doxycycline"><option value="Enalapril"><option value="Escitalopram">
+                <option value="Folic acid"><option value="Furosemide"><option value="Gabapentin">
+                <option value="Glimepiride"><option value="Hydrochlorothiazide"><option value="Ibuprofen">
+                <option value="Levothyroxine"><option value="Losartan"><option value="Metformin">
+                <option value="Metoprolol"><option value="Montelukast"><option value="Omeprazole">
+                <option value="Pantoprazole"><option value="Paracetamol"><option value="Prednisolone">
+                <option value="Ramipril"><option value="Rosuvastatin"><option value="Sertraline">
+                <option value="Spironolactone"><option value="Telmisartan"><option value="Warfarin">
+              </datalist>
               <label>Amount as prescribed<input name="amount" required maxlength="100"></label>
               <label>Dose time (IST)<input name="time" type="time" required></label>
               <div class="date-fields">
@@ -162,13 +182,19 @@
               <div class="actions"><button class="primary">Add medication</button><button type="button" class="quiet cancel" hidden>Cancel edit</button></div>
             </form>
           </section>
+          <section class="card schedule-preview"><h2>Next seven days</h2><div id="week-plan" class="week-plan"></div></section>
+        </div>
+      </section>
+      <section id="appointments" class="view" hidden>
+        <div class="heading"><h1>Appointments</h1><p class="muted">Times are shown in India Standard Time.</p></div>
           <section class="card">
-            <h2>Appointments</h2>
+            <h2>Requests and scheduled visits</h2>
             <div id="appointment-requests"></div>
             <div id="appointment-list"></div>
             <form id="request-appointment-form" class="stack" hidden>
               <label>Doctor<select name="doctor" id="doctor-picker" required></select></label>
               <label>Appointment title<input name="name" required maxlength="100"></label>
+              <label>Questions for your doctor <span>(optional)</span><textarea name="questions" maxlength="1000" rows="3"></textarea></label>
               <button class="primary">Send request to doctor</button>
             </form>
             <p id="no-linked-doctors" hidden>Invite your doctor from People &amp; access before requesting an appointment.</p>
@@ -179,8 +205,10 @@
               <div class="actions"><button class="primary">Add appointment</button><button type="button" class="quiet cancel" hidden>Cancel edit</button></div>
             </form>
           </section>
-        </div>
-        <section class="card schedule-preview"><h2>Next seven days</h2><div id="week-plan" class="week-plan"></div></section>
+      </section>
+      <section id="refills" class="view" hidden>
+        <div class="heading"><h1>Refills</h1></div>
+        <div id="refill-cards" class="refill-cards"></div>
       </section>
       <section id="circle" class="view" hidden>
         <div class="heading"><div><p class="eyebrow">Shared care</p><h1 id="access-heading">People &amp; access</h1></div></div>
@@ -201,7 +229,21 @@
               <div class="actions"><button class="primary">Add contact or invite</button><button type="button" class="quiet cancel" hidden>Cancel edit</button></div>
             </form>
           </section>
-          <section class="card"><h2>Reminder activity</h2><div id="delivery-list"></div></section>
+          <div class="access-panels">
+            <section class="card">
+              <h2>Handoff escalation</h2>
+              <p>Choose who gets the first email and who takes over if no one claims the follow-up.</p>
+              <p id="handoff-empty" hidden>Link two care-team members to set up a backup.</p>
+              <form id="handoff-form" class="stack" hidden>
+                <label>Primary contact<select name="primary" id="handoff-primary" required></select></label>
+                <label>Backup contact<select name="backup" id="handoff-backup" required></select></label>
+                <label>Wait before notifying backup (minutes)<input name="wait" type="number" min="5" max="120" required value="15"></label>
+                <button class="primary">Save handoff rule</button>
+              </form>
+              <button type="button" id="disable-handoff" class="quiet" hidden>Disable rule</button>
+            </section>
+            <section class="card"><h2>Reminder activity</h2><div id="delivery-list"></div></section>
+          </div>
         </div>
       </section>
     </section>

@@ -159,7 +159,7 @@ function refresh() {
 }
 
 const now = () => state.now + Date.now() - syncedAt;
-const grace = () => 30 * 60_000;
+const grace = () => state.doseGrace || 5 * 60_000;
 const status = dose => dose.taken_at ? 'Taken' : now() >= dose.due + grace(dose) ? 'Unconfirmed' : now() >= dose.due ? 'Due' : 'Upcoming';
 const pill = label => '<span class="pill" data-status="' + safe(label) + '">' + safe(label) + '</span>';
 const doseDetail = dose => dose.amount + ' · ' + time(dose.due);
@@ -170,9 +170,57 @@ const todaysDoses = () => state.doses.filter(dose => dose.due >= state.start && 
 
 function stopReading() {
   if (!speech) return;
+  const current = speech;
   speech = undefined;
-  window.speechSynthesis.cancel();
+  if (current.sources) {
+    current.controller.abort();
+    for (const source of current.sources) source.stop();
+  } else {
+    window.speechSynthesis?.cancel();
+  }
   byId('read-today').textContent = 'Read today aloud';
+}
+
+async function playAudioOverview(doses, pending, appointment) {
+  const playback = { sources: [], controller: new AbortController() };
+  const current = now();
+  const clips = [];
+  if (pending.some(dose => dose.due <= current && current < dose.due + grace())) clips.push('due');
+  if (pending.some(dose => dose.due + grace() <= current)) clips.push('overdue');
+  if (pending.some(dose => dose.due > current)) clips.push('upcoming');
+  if (!pending.length) clips.push(doses.length ? 'complete' : 'no-doses');
+  clips.push(appointment ? 'appointment' : 'no-appointments');
+  speech = playback;
+  byId('read-today').textContent = 'Stop reading';
+  notice('Playing a short audio overview. Medication names and times are on Today.');
+  try {
+    audio ??= new AudioContext();
+    await audio.resume();
+    const buffers = await Promise.all(clips.map(async clip => {
+      const response = await fetch('/voice/' + clip + '.wav', { signal: playback.controller.signal });
+      if (!response.ok) throw new Error('Audio clip unavailable');
+      return audio.decodeAudioData(await response.arrayBuffer());
+    }));
+    if (speech !== playback) return;
+    let at = audio.currentTime;
+    for (const buffer of buffers) {
+      const source = audio.createBufferSource();
+      source.buffer = buffer;
+      source.connect(audio.destination);
+      source.start(at);
+      playback.sources.push(source);
+      at += buffer.duration + 0.18;
+    }
+    playback.sources.at(-1).onended = () => {
+      if (speech !== playback) return;
+      speech = undefined;
+      byId('read-today').textContent = 'Read today aloud';
+    };
+  } catch {
+    if (speech !== playback) return;
+    stopReading();
+    notice('Could not play the audio overview. The care plan is still shown on Today.', true);
+  }
 }
 
 byId('read-today').addEventListener('click', () => {
@@ -184,14 +232,14 @@ byId('read-today').addEventListener('click', () => {
   const synthesis = window.speechSynthesis;
   const localVoices = synthesis?.getVoices().filter(voice => voice.localService && /^en\b/i.test(voice.lang)) ?? [];
   const voice = localVoices.find(item => item.lang.toLowerCase() === 'en-in') ?? localVoices[0];
-  if (!voice || !window.SpeechSynthesisUtterance) {
-    notice('Read aloud needs an on-device English voice in your browser.', true);
-    return;
-  }
   const current = now();
   const doses = todaysDoses();
   const pending = doses.filter(dose => !dose.taken_at);
   const appointment = state.appointments.find(item => item.due > current);
+  if (!voice || !window.SpeechSynthesisUtterance) {
+    void playAudioOverview(doses, pending, appointment);
+    return;
+  }
   const parts = [
     'Care plan for ' + state.person.name + '.',
     doses.length ? (doses.length - pending.length) + ' of ' + doses.length + ' doses marked taken today.' : 'No doses scheduled today.',
@@ -225,6 +273,9 @@ function followupRow(item, checkin = false) {
       ? 'Caller: ' + item.claimed_by + ' · Completed ' + dayTime(item.completed_at)
       : 'Following up: ' + item.claimed_by + ' · ' + time(item.claimed_at);
   }
+  const notifications = (state.handoffNotices || []).filter(entry => entry.event === item.id);
+  if (notifications.length) detail += ' · ' + notifications.map(entry =>
+    entry.name + (entry.kind.endsWith('_backup') ? ' (backup)' : '') + ' emailed ' + time(entry.attempted)).join(', ');
   const prefix = checkin ? 'checkin-' : '';
   const canComplete = state.me.owner || item.claimed_member === state.me.id;
   const action = item.completed_at ? pill('Checked in')
@@ -284,33 +335,102 @@ function renderToday() {
   renderReport(current);
   const alarmText = due.length ? 'Dose due: ' + due.map(dose => dose.name).join(', ') : '';
   if (byId('alarm-message').textContent !== alarmText) byId('alarm-message').textContent = alarmText;
-  byId('alarm').hidden = !due.length;
-  if (!due.length) stopAlarm();
-  if (armed && audio?.state === 'running' && due.some(dose => !sounded.has(dose.id))) {
+  byId('alarm').hidden = !state.me.owner || !due.length;
+  if (!state.me.owner || !due.length) stopAlarm();
+  if (state.me.owner && armed && audio?.state === 'running' && due.some(dose => !sounded.has(dose.id))) {
     due.forEach(dose => sounded.add(dose.id));
     startAlarm();
   }
 }
 
 const controls = (entity, item) => button('edit-' + entity, item.id, 'Edit') + button('delete-' + entity, item.id, entity === 'medications' ? 'Retire' : 'Remove');
-const deliveryLabels = { accepted: 'Accepted by Brevo', sending: 'Sending', failed: 'Failed', retry: 'Retry pending', review: 'Check Brevo logs', unconfigured: 'Provider not configured', suppressed: 'Suppressed' };
-const reminderLabels = { upcoming: 'Upcoming dose', unconfirmed: 'Unconfirmed dose', appointment: 'Appointment', appointment_request: 'Appointment request', checkin: 'Requested check-in' };
+const deliveryLabels = { accepted: 'Email sent', sending: 'Sending', failed: 'Failed', retry: 'Retry pending', review: 'Check delivery logs', unconfigured: 'Provider not configured', suppressed: 'Suppressed' };
+const reminderLabels = { upcoming: 'Upcoming dose', unconfirmed: 'Unconfirmed dose', appointment: 'Appointment', appointment_request: 'Appointment request', appointment_change: 'Alternate appointment time', checkin: 'Requested check-in', checkin_backup: 'Check-in backup', dose_backup: 'Dose follow-up backup', refill: 'Refill reminder' };
+
+const personOptions = (people, selected, placeholder) => '<option value="">' + placeholder + '</option>' +
+  people.map(person => '<option value="' + safe(person.id) + '"' + (person.id === selected ? ' selected' : '') + '>' + safe(person.name + ' · ' + person.relationship) + '</option>').join('');
+
+function renderRefills() {
+  const tracked = state.refills || [];
+  show('refill-cards', state.medications.map(medication => {
+    const refill = tracked.find(item => item.medication === medication.id);
+    const low = refill?.runout && refill.remaining <= refill.threshold;
+    const count = refill ? refill.remaining + ' doses left' : 'Refill tracking is off.';
+    const timing = refill?.runout ? empty('First dose without supply: ' + dayTime(refill.runout)) : '';
+    const preferences = state.me.owner
+      ? '<label>Remind me at this many doses left<input name="threshold" type="number" min="0" max="90" required value="' + (refill?.threshold ?? 3) + '"></label>'
+        + '<label>Send the refill email to<select name="contact">' + personOptions(state.people || [], refill?.contact, 'Me') + '</select></label>'
+      : '';
+    const form = state.me.owner || refill
+      ? '<form class="stack" data-refill="' + safe(medication.id) + '"><label>Counted doses left<input name="quantity" type="number" min="0" max="10000" required value="' + (refill?.remaining ?? '') + '"></label>'
+        + preferences + '<div class="actions"><button class="primary">Save dose count</button>'
+        + (state.me.owner && refill ? button('disable-refill', medication.id, 'Stop tracking') : '') + '</div></form>'
+      : '';
+    return '<article class="card"' + (low ? ' data-low' : '') + '><h2>' + safe(medication.name) + '</h2>' + empty(count) + timing + form + '</article>';
+  }).join('') || empty('Add a medication in Schedule to track refills.'));
+}
+
+function renderHandoff() {
+  const people = state.people || [];
+  const form = byId('handoff-form');
+  form.hidden = !state.me.owner || people.length < 2;
+  byId('handoff-empty').hidden = !state.me.owner || people.length >= 2;
+  byId('disable-handoff').hidden = !state.handoff;
+  const rule = state.handoff;
+  const version = [activePatient, rule?.primary_member, rule?.backup_member, rule?.wait_minutes, ...people.map(item => item.id)].join('|');
+  if (form.dataset.version === version) return;
+  form.dataset.version = version;
+  show('handoff-primary', personOptions(people, rule?.primary_member, 'Choose primary'));
+  show('handoff-backup', personOptions(people, rule?.backup_member, 'Choose backup'));
+  form.elements.primary.value = people.some(item => item.id === rule?.primary_member) ? rule.primary_member : '';
+  form.elements.backup.value = people.some(item => item.id === rule?.backup_member) ? rule.backup_member : '';
+  form.elements.wait.value = rule?.wait_minutes ?? 15;
+}
+
+function visitForm(item, action, fields, label) {
+  return '<form class="visit-form" data-request="' + safe(item.id) + '" data-mode="' + action + '">' + fields + '<button class="primary">' + label + '</button></form>';
+}
+
+function visitDetails(item) {
+  const patient = state.me.owner;
+  const doctor = state.me.relationship === 'Doctor';
+  const future = item.status === 'scheduled' && item.due > now();
+  const completed = item.status === 'scheduled' && !future;
+  const questionsField = '<label>Questions for the doctor<textarea name="questions" rows="3" maxlength="1000">' + safe(item.questions) + '</textarea></label>';
+  const parts = [];
+  if (item.questions) parts.push('<p class="visit-notes"><strong>Questions for the doctor</strong><br>' + safe(item.questions) + '</p>');
+  if (patient && (future || item.status === 'pending')) parts.push(visitForm(item, 'questions', questionsField, 'Save questions'));
+  if (item.proposal_state) {
+    const decision = item.proposal_state === 'pending' ? (future ? 'Awaiting doctor’s reply' : 'Proposal expired') : item.proposal_state === 'accepted' ? 'Alternate time accepted' : 'Alternate time declined';
+    parts.push(empty(decision + ' · ' + dayTime(item.proposed_due)));
+  }
+  if (patient && future) parts.push(visitForm(item, 'propose', '<label>Alternate date and time (IST)<input name="due" type="datetime-local" required></label>', 'Propose another time'));
+  if (doctor && future && item.proposal_state === 'pending') {
+    const key = item.id + '|' + item.proposed_due;
+    parts.push('<div class="actions">' + button('accept-proposal', key, 'Accept alternate time', 'primary') + button('decline-proposal', key, 'Decline alternate time') + '</div>');
+  }
+  if (item.visit_summary) parts.push('<p class="visit-notes"><strong>Visit summary</strong><br>' + safe(item.visit_summary) + '</p>');
+  if (doctor && completed) parts.push(visitForm(item, 'summary', '<label>Visit summary<textarea name="summary" rows="4" maxlength="1500" required>' + safe(item.visit_summary) + '</textarea></label>', 'Save visit summary'));
+  return parts.join('');
+}
 
 function renderSchedule() {
-  show('medication-list', state.medications.map(item => row(item.name, item.amount + ' · ' + item.time + ' IST · ' + (item.interval_days === 1 ? 'Daily' : 'Every ' + item.interval_days + ' days'), controls('medications', item))).join('') || empty('No medications yet.'));
-  byId('open-appointment').hidden = !state.me.owner;
+  show('medication-list', state.medications.map(item => row(item.name, item.amount + ' · ' + item.time + ' IST · ' + (item.interval_days === 1 ? 'Daily' : 'Every ' + item.interval_days + ' days')
+    + (item.updated_by ? ' · Updated by ' + item.updated_by + ' · Effective ' + dayTime(Math.max(item.effective, item.start_day || 0)) : ''), controls('medications', item))).join('') || empty('No medications yet.'));
+  byId('open-appointment').textContent = state.me.owner ? 'Request an appointment' : 'Open appointments';
   byId('appointment-form').hidden = state.me.owner;
   byId('request-appointment-form').hidden = !state.me.owner || !state.doctors.length;
   byId('no-linked-doctors').hidden = !state.me.owner || Boolean(state.doctors.length);
   show('doctor-picker', '<option value="">Choose doctor</option>' + state.doctors.map(doctor => '<option value="' + safe(doctor.id) + '">' + safe(doctor.name) + '</option>').join(''));
   show('today-request-status', state.me.owner ? state.requests.slice(0, 3).map(item => empty(item.name + ' · ' + (item.status === 'pending' ? 'Awaiting ' + item.doctor_name : item.status === 'scheduled' ? 'Scheduled for ' + dayTime(item.due) : item.status))).join('') : '');
-  show('appointment-requests', state.requests.filter(item => item.status !== 'scheduled').map(item => {
-    const description = item.doctor_name + ' · ' + (item.status === 'pending' ? 'Awaiting response' : item.status);
+  show('appointment-requests', state.requests.map(item => {
+    const description = item.doctor_name + ' · ' + (item.status === 'scheduled' ? dayTime(item.due) + (item.location ? ' · ' + item.location : '') : item.status === 'pending' ? 'Awaiting response' : item.status);
     let actions = item.status === 'pending' && state.me.owner ? button('cancel-request', item.id, 'Cancel request') : '';
     if (item.status === 'pending' && state.me.relationship === 'Doctor') actions = '<form class="request-response" data-request="' + safe(item.id) + '"><label>Appointment time (IST)<input name="due" type="datetime-local" required></label><label>Location<input name="location" maxlength="100"></label><button class="primary">Accept and schedule</button></form>' + button('decline-request', item.id, 'Decline');
-    return row(item.name, description, actions);
+    return '<article class="visit-entry">' + row(item.name, description, actions) + visitDetails(item) + '</article>';
   }).join(''));
-  show('appointment-list', state.appointments.map(item => row(item.name, dayTime(item.due) + (item.location ? ' · ' + item.location : ''), !state.me.owner && !item.status ? controls('appointments', item) : '')).join('') || empty('No appointments scheduled.'));
+  const standalone = state.appointments.filter(item => !state.requests.some(request => request.id === item.id));
+  show('appointment-list', standalone.map(item => row(item.name, dayTime(item.due) + (item.location ? ' · ' + item.location : ''), !state.me.owner && !item.status ? controls('appointments', item) : '')).join('') || (state.requests.length ? '' : empty('No appointments scheduled.')));
   show('week-plan', Array.from({ length: 7 }, (_, index) => {
     const day = state.start + index * dayLength;
     const schedule = state.medications.filter(item => {
@@ -325,9 +445,16 @@ function renderSchedule() {
 
 function render() {
   renderToday();
+  byId('sound').hidden = !state.me.owner;
+  const canSearchMedicines = state.me.relationship === 'Doctor';
+  if (canSearchMedicines) byId('medication-name').setAttribute('list', 'medicine-suggestions');
+  else byId('medication-name').removeAttribute('list');
+  byId('medication-search-help').hidden = !canSearchMedicines;
   byId('circle-owner').hidden = !state.me.owner;
   byId('circle-helper').hidden = state.me.owner;
   renderSchedule();
+  renderRefills();
+  renderHandoff();
   show('access-list', state.contacts.filter(item => item.account && !item.revoked).map(item =>
     row(item.access_name, item.relationship + ' · Can view and manage your schedule')).join('') || empty('Only you can access your schedule right now.'));
   show('contact-list', state.contacts.map(item => {
@@ -335,7 +462,7 @@ function render() {
       : item.invite_expires && item.invite_expires <= now() ? 'Invitation expired' : item.member ? 'Invite pending' : 'Alerts only';
     return row(item.name, [item.email, item.phone, access, item.alerts && !item.declined_at ? 'Alerts on' : 'Alerts off'].filter(Boolean).join(' · '), controls('contacts', item) + (item.member && !item.revoked ? button('revoke', item.id, item.account ? 'Revoke access' : 'Cancel invitation') : ''));
   }).join('') || empty('Add a family member, caregiver, or doctor.'));
-  show('delivery-list', state.deliveries.map(item => row(reminderLabels[item.kind], item.recipient + ' · ' + time(item.attempted), pill(deliveryLabels[item.state] || item.state))).join('') || empty('No reminders sent yet.'));
+  show('delivery-list', state.deliveries.map(item => row(reminderLabels[item.kind], item.recipient + ' · ' + time(item.attempted), pill(item.state === 'accepted' && item.channel === 'sms' ? 'SMS sent' : deliveryLabels[item.state] || item.state))).join('') || empty('No reminders sent yet.'));
 }
 
 function tone(output) {
@@ -377,6 +504,7 @@ function startAlarm() {
 
 byId('silence-alarm').addEventListener('click', stopAlarm);
 byId('sound').addEventListener('click', async () => {
+  if (!state?.me.owner) return;
   if (armed) {
     armed = false;
     stopAlarm();
@@ -500,6 +628,29 @@ byId('patient-cards').addEventListener('click', event => {
   selectPatient(activePatient === patient.dataset.patient ? '' : patient.dataset.patient);
   refresh().catch(error => notice(error.message, true));
 });
+byId('refill-cards').addEventListener('submit', event => {
+  event.preventDefault();
+  const form = event.target;
+  perform(form.querySelector('button.primary'), async () => {
+    await api('refills/' + form.dataset.refill, 'POST', formValues(form));
+    await refresh();
+    notice('Dose count saved.');
+  });
+});
+byId('handoff-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const form = event.target;
+  perform(form.querySelector('button.primary'), async () => {
+    await api('handoff', 'POST', formValues(form));
+    await refresh();
+    notice('Handoff rule saved.');
+  });
+});
+byId('disable-handoff').addEventListener('click', event => perform(event.currentTarget, async () => {
+  await api('handoff', 'DELETE');
+  await refresh();
+  notice('Handoff escalation disabled.');
+}));
 byId('request-appointment-form').addEventListener('submit', event => {
   event.preventDefault();
   const form = event.target;
@@ -515,10 +666,11 @@ byId('appointment-requests').addEventListener('submit', event => {
   const form = event.target;
   perform(form.querySelector('button'), async () => {
     const values = formValues(form);
-    values.due = Date.parse(values.due + '+05:30');
-    await api('appointment-requests/' + form.dataset.request + '/accept', 'POST', values);
+    if (values.due) values.due = Date.parse(values.due + '+05:30');
+    const mode = form.dataset.mode || 'accept';
+    await api('appointment-requests/' + form.dataset.request + '/' + mode, 'POST', values);
     await refresh();
-    notice('Appointment scheduled.');
+    notice({ accept: 'Appointment scheduled.', propose: 'Alternate time sent to your doctor.', questions: 'Questions saved.', summary: 'Visit summary posted.' }[mode]);
   });
 });
 function resetInviteReview() {
@@ -606,10 +758,15 @@ document.addEventListener('click', event => {
       await api('contacts/' + id + '/revoke', 'POST');
     } else if (action === 'request-checkin') {
       await api('checkins', 'POST');
+    } else if (action === 'disable-refill') {
+      await api('refills/' + id, 'DELETE');
     } else if (action.startsWith('checkin-')) {
       await api('checkins/' + id + '/' + action.slice(8), 'POST');
     } else if (action.endsWith('-request')) {
       await api('appointment-requests/' + id + '/' + action.split('-')[0], 'POST');
+    } else if (action.endsWith('-proposal')) {
+      const [request, proposed] = id.split('|');
+      await api('appointment-requests/' + request + '/' + action, 'POST', { proposed: Number(proposed) });
     } else {
       await api('doses/' + id + '/' + action, 'POST');
     }
@@ -621,8 +778,11 @@ document.addEventListener('click', event => {
       complete: 'Check-in marked complete.',
       'checkin-complete': 'Check-in marked complete.',
       'request-checkin': 'Check-in requested.',
+      'disable-refill': 'Refill tracking disabled.',
       'cancel-request': 'Appointment request cancelled.',
       'decline-request': 'Appointment request declined.',
+      'accept-proposal': 'Alternate appointment time accepted.',
+      'decline-proposal': 'Alternate time declined. The scheduled time remains.',
       revoke: 'Access revoked.'
     };
     notice(messages[action] || 'Entry removed.');

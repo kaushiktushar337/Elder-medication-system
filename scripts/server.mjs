@@ -36,6 +36,9 @@ const assets = {
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
   '/styles.css': ['styles.css', 'text/css; charset=utf-8']
 };
+for (const clip of ['due', 'overdue', 'upcoming', 'complete', 'no-doses', 'appointment', 'no-appointments']) {
+  assets['/voice/' + clip + '.wav'] = ['voice/' + clip + '.wav', 'audio/wav'];
+}
 const securityHeaders = {
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'no-referrer',

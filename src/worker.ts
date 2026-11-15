@@ -1,12 +1,13 @@
 import { materialize, remind, sendInviteEmail } from './reminders.ts';
 import { hashPassword, validPassword, verifyPassword } from './password.ts';
+import { refillForecast, refillLevels, remaining } from './refills.ts';
 export { remind };
 
 export const MINUTE = 60_000;
 export const DAY = 86_400_000;
 export const IST = 330 * MINUTE;
 export const localDay = (now: number) => Math.floor((now + IST) / DAY) * DAY - IST;
-export const grace = 30 * MINUTE;
+export const grace = 5 * MINUTE;
 export const query = (env, sql, ...args) => env.DB.prepare(sql).bind(...args);
 export const rows = async (env, sql, ...args) => (await query(env, sql, ...args).all()).results;
 const uuid = () => crypto.randomUUID();
@@ -175,9 +176,9 @@ async function route(request, env) {
   if (resource === 'patients' && method === 'GET') {
     const patients = await rows(env, `SELECT p.id, p.name, m.relationship, m.role,
       (SELECT COUNT(*) FROM doses d WHERE d.profile = p.id AND d.demo = 0 AND d.cancelled = 0 AND d.taken_at IS NULL AND d.due BETWEEN ? AND ?) AS overdue,
-      (SELECT COUNT(*) FROM appointment_requests ar WHERE ar.profile = p.id AND ar.status = 'pending') AS pending
+      (SELECT COUNT(*) FROM appointment_requests ar WHERE ar.profile = p.id AND (ar.status = 'pending' OR (ar.proposal_state = 'pending' AND ar.due > ?))) AS pending
       FROM members m JOIN profiles p ON p.id = m.profile WHERE m.account = ? AND m.revoked = 0
-      ORDER BY overdue DESC, pending DESC, p.name, p.id`, localDay(now) - DAY, now - grace, account.id);
+      ORDER BY overdue DESC, pending DESC, p.name, p.id`, localDay(now) - DAY, now - grace, now, account.id);
     return json({ account: { name: account.name, kind: account.kind, needsSetup: !account.email }, patients });
   }
   const patient = url.searchParams.get('patient');
@@ -186,6 +187,44 @@ async function route(request, env) {
   if (!member) return error('This patient is unavailable to your account.', 404);
   const profile = member.profile;
   const owner = member.role === 'owner';
+  const linkedMembers = () => rows(env, "SELECT m.id, m.name, m.relationship FROM members m JOIN accounts a ON a.id = m.account WHERE m.profile = ? AND m.role = 'caregiver' AND m.revoked = 0 AND a.email IS NOT NULL ORDER BY m.name", profile);
+  if (resource === 'handoff' && ['POST', 'DELETE'].includes(method)) {
+    if (!owner) return error('Only the patient can change handoff contacts.', 403);
+    if (method === 'DELETE') {
+      await query(env, 'DELETE FROM handoff_rules WHERE profile = ?', profile).run();
+      return json({ ok: true });
+    }
+    const { primary, backup } = body;
+    const wait = Number(body.wait);
+    const contacts = await linkedMembers();
+    if (primary === backup || !contacts.some(item => item.id === primary) || !contacts.some(item => item.id === backup) ||
+        !Number.isInteger(wait) || wait < 5 || wait > 120) return error('Choose two different linked people and a delay of 5 to 120 minutes.');
+    await query(env, `INSERT INTO handoff_rules VALUES (?, ?, ?, ?) ON CONFLICT(profile) DO UPDATE SET
+      primary_member = excluded.primary_member, backup_member = excluded.backup_member, wait_minutes = excluded.wait_minutes`, profile, primary, backup, wait).run();
+    return json({ ok: true });
+  }
+  if (resource === 'refills' && id && ['POST', 'DELETE'].includes(method)) {
+    const medication = await query(env, 'SELECT id FROM medications WHERE id = ? AND profile = ? AND active = 1', id, profile).first();
+    if (!medication) return error('Medication not found.', 404);
+    if (method === 'DELETE') {
+      if (!owner) return error('Only the patient can disable refill tracking.', 403);
+      await query(env, 'DELETE FROM refills WHERE medication = ?', id).run();
+      return json({ ok: true });
+    }
+    const quantity = Number(body.quantity);
+    const previous = await query(env, 'SELECT threshold, contact FROM refills WHERE medication = ?', id).first();
+    if (!owner && !previous) return error('Ask the patient to enable refill tracking first.', 403);
+    const threshold = owner ? Number(body.threshold) : previous.threshold;
+    const contact = owner ? text(body.contact) || null : previous.contact;
+    if (!String(body.quantity ?? '').trim() || (owner && !String(body.threshold ?? '').trim()) ||
+        !Number.isInteger(quantity) || quantity < 0 || quantity > 10000 ||
+        !Number.isInteger(threshold) || threshold < 0 || threshold > 90 ||
+        (owner && contact && !(await linkedMembers()).some(item => item.id === contact))) return error('Enter a valid dose count and reminder preference.');
+    await query(env, `INSERT INTO refills VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(medication) DO UPDATE SET
+      snapshot = excluded.snapshot, quantity = excluded.quantity, threshold = excluded.threshold,
+      recorded_at = excluded.recorded_at, contact = excluded.contact`, id, uuid(), quantity, threshold, now, contact).run();
+    return json({ ok: true });
+  }
   if (resource === 'state' && method === 'GET') {
     await materialize(env, now, profile);
     const start = localDay(now);
@@ -196,14 +235,24 @@ async function route(request, env) {
         UNION ALL SELECT id, profile, name, location, due, status FROM appointment_requests WHERE profile = ? AND status = 'scheduled'
         ORDER BY due`, profile, profile),
       rows(env, `SELECT r.*, m.name AS doctor_name FROM appointment_requests r JOIN members m ON m.id = r.doctor
-        WHERE r.profile = ? AND (? = 1 OR r.doctor = ? OR r.status = 'scheduled') ORDER BY r.requested_at DESC LIMIT 30`, profile, Number(owner), member.id),
+        WHERE r.profile = ? AND (? = 1 OR r.doctor = ?) ORDER BY r.requested_at DESC LIMIT 30`, profile, Number(owner), member.id),
       owner ? rows(env, "SELECT id, name FROM members WHERE profile = ? AND relationship = 'Doctor' AND account IS NOT NULL AND revoked = 0 ORDER BY name", profile) : [],
       rows(env, 'SELECT * FROM doses WHERE profile = ? AND cancelled = 0 AND demo = 0 AND due >= ? AND due < ? ORDER BY due', profile, start - 6 * DAY, start + DAY),
       rows(env, 'SELECT * FROM checkins WHERE profile = ? AND (completed_at IS NULL OR completed_at >= ?) ORDER BY CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END, requested_at DESC LIMIT 20', profile, start - 6 * DAY),
       owner ? rows(env, 'SELECT c.*, m.revoked, m.relationship, m.account, m.name AS access_name, m.invite_expires, m.declined_at FROM contacts c LEFT JOIN members m ON m.id = c.member WHERE c.profile = ? ORDER BY c.name', profile) : [],
       owner ? rows(env, 'SELECT * FROM deliveries WHERE profile = ? ORDER BY attempted DESC LIMIT 20', profile) : []
     ]);
-    return json({ person, me: { id: member.id, name: member.name, owner, relationship: member.relationship }, medications, appointments, requests, doctors, doses, checkins, contacts, deliveries, now, start });
+    const [refills, handoff, people, handoffNotices] = await Promise.all([
+      refillLevels(env, profile),
+      query(env, 'SELECT * FROM handoff_rules WHERE profile = ?', profile).first(),
+      owner ? linkedMembers() : [],
+      rows(env, `SELECT d.event, d.kind, d.attempted, a.name FROM deliveries d JOIN accounts a ON a.email = d.recipient
+        WHERE d.profile = ? AND d.state = 'accepted' AND d.kind IN ('checkin', 'unconfirmed', 'checkin_backup', 'dose_backup')
+        ORDER BY attempted DESC LIMIT 80`, profile)
+    ]);
+    return json({ person, me: { id: member.id, name: member.name, owner, relationship: member.relationship }, medications, appointments, requests, doctors, doses, checkins, contacts, deliveries,
+      refills: refills.map(item => ({ medication: item.medication, name: item.name, remaining: remaining(item), threshold: item.threshold, contact: item.contact, runout: refillForecast(item, now) })),
+      handoff, people, handoffNotices, now, start, doseGrace: grace });
   }
   if (resource === 'appointment-requests' && method === 'POST') {
     if (!id) {
@@ -212,14 +261,41 @@ async function route(request, env) {
       const doctor = await query(env, "SELECT id FROM members WHERE id = ? AND profile = ? AND relationship = 'Doctor' AND account IS NOT NULL AND revoked = 0", text(body.doctor), profile).first();
       if (!name || !doctor) return error('Choose a linked doctor and enter an appointment title.');
       const requestId = uuid();
-      const result = await query(env, 'INSERT INTO appointment_requests (id, profile, doctor, name, requested_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING', requestId, profile, doctor.id, name, now).run();
+      const result = await query(env, 'INSERT INTO appointment_requests (id, profile, doctor, name, requested_at, questions) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING', requestId, profile, doctor.id, name, now, text(body.questions, 1000)).run();
       return result.meta.changes ? json({ id: requestId }, 201) : error('This doctor already has a pending request with that title.', 409);
     }
     if (action === 'cancel' && owner) {
       const result = await query(env, "UPDATE appointment_requests SET status = 'cancelled' WHERE id = ? AND profile = ? AND status = 'pending'", id, profile).run();
       return result.meta.changes ? json({ ok: true }) : error('This request is no longer pending.', 409);
     }
-    if (member.relationship !== 'Doctor' || !['accept', 'decline'].includes(action)) return error('Only the assigned doctor can respond.', 403);
+    if (['propose', 'questions'].includes(action)) {
+      if (!owner) return error('Only the patient can update these visit details.', 403);
+      let result;
+      if (action === 'questions') {
+        result = await query(env, "UPDATE appointment_requests SET questions = ? WHERE id = ? AND profile = ? AND (status = 'pending' OR (status = 'scheduled' AND due > ?))", text(body.questions, 1000), id, profile, now).run();
+      } else {
+        const proposed = Number(body.due);
+        if (!Number.isSafeInteger(proposed) || proposed <= now || proposed > now + 366 * DAY) return error('Choose a future alternate time.');
+        result = await query(env, "UPDATE appointment_requests SET proposed_due = ?, proposed_at = ?, proposal_state = 'pending' WHERE id = ? AND profile = ? AND status = 'scheduled' AND due > ? AND due <> ?", proposed, now, id, profile, now, proposed).run();
+      }
+      return result.meta.changes ? json({ ok: true }) : error('The visit is unavailable or that time is already scheduled.', 409);
+    }
+    if (member.relationship !== 'Doctor') return error('Only the assigned doctor can respond.', 403);
+    if (['accept-proposal', 'decline-proposal'].includes(action)) {
+      const accepted = action === 'accept-proposal';
+      const proposed = Number(body.proposed);
+      const result = await query(env, `UPDATE appointment_requests SET proposal_state = ?${accepted ? ', due = proposed_due' : ''}
+        WHERE id = ? AND profile = ? AND doctor = ? AND status = 'scheduled' AND proposal_state = 'pending'
+        AND due > ? AND proposed_due = ? AND (? = 0 OR proposed_due > ?)`, accepted ? 'accepted' : 'declined', id, profile, member.id, now, proposed, Number(accepted), now).run();
+      return result.meta.changes ? json({ ok: true }) : error('This proposed time changed, expired, or already received a response.', 409);
+    }
+    if (action === 'summary') {
+      const summary = text(body.summary, 1500);
+      if (!summary) return error('Enter a short visit summary.');
+      const result = await query(env, "UPDATE appointment_requests SET visit_summary = ?, summarized_at = ? WHERE id = ? AND profile = ? AND doctor = ? AND status = 'scheduled' AND due <= ?", summary, now, id, profile, member.id, now).run();
+      return result.meta.changes ? json({ ok: true }) : error('A summary can be added after the scheduled visit time.', 409);
+    }
+    if (!['accept', 'decline'].includes(action)) return error('Appointment action not found.', 404);
     const due = Number(body.due);
     if (action === 'accept' && (!Number.isSafeInteger(due) || due <= now || due > now + 366 * DAY)) return error('Choose a future appointment time.');
     const result = await query(env, "UPDATE appointment_requests SET status = ?, due = ?, location = ? WHERE id = ? AND profile = ? AND doctor = ? AND status = 'pending'",
@@ -307,7 +383,7 @@ async function route(request, env) {
       const time = text(body.time);
       const pattern = medicationPattern(body, now);
       if (method === 'PATCH' && (!name || !amount || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time) || !pattern)) return error('Check the medication, time, and schedule dates.');
-      const update = method === 'DELETE' ? query(env, 'UPDATE medications SET active = 0 WHERE id = ? AND profile = ?', id, profile) : query(env, 'UPDATE medications SET name = ?, amount = ?, time = ?, effective = ?, start_day = ?, end_day = ?, interval_days = ?, skip_dates = ? WHERE id = ? AND profile = ?', name, amount, time, now, ...pattern, id, profile);
+      const update = method === 'DELETE' ? query(env, 'UPDATE medications SET active = 0 WHERE id = ? AND profile = ?', id, profile) : query(env, 'UPDATE medications SET name = ?, amount = ?, time = ?, effective = ?, start_day = ?, end_day = ?, interval_days = ?, skip_dates = ?, updated_by = ? WHERE id = ? AND profile = ?', name, amount, time, now, ...pattern, member.name, id, profile);
       await env.DB.batch([update, query(env, 'UPDATE doses SET cancelled = 1 WHERE medication = ? AND profile = ? AND due > ? AND taken_at IS NULL', id, profile, now)]);
       return json({ ok: true });
     }
@@ -318,7 +394,7 @@ async function route(request, env) {
       const pattern = medicationPattern(body, now);
       if (!name || !amount || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time) || !pattern) return error('Check the medication, time, and schedule dates.');
       const medication = uuid();
-      await query(env, 'INSERT INTO medications (id, profile, name, amount, time, effective, start_day, end_day, interval_days, skip_dates) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', medication, profile, name, amount, time, now, ...pattern).run();
+      await query(env, 'INSERT INTO medications (id, profile, name, amount, time, effective, start_day, end_day, interval_days, skip_dates, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', medication, profile, name, amount, time, now, ...pattern, member.name).run();
       return json({ id: medication }, 201);
     }
   }
