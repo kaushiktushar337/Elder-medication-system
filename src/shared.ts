@@ -1,0 +1,12 @@
+export const MINUTE = 60_000;
+export const DAY = 86_400_000;
+export const IST = 330 * MINUTE;
+export const localDay = (now: number) => Math.floor((now + IST) / DAY) * DAY - IST;
+export const grace = 5 * MINUTE;
+export const query = (env, sql, ...args) => env.DB.prepare(sql).bind(...args);
+export const rows = async (env, sql, ...args) => (await query(env, sql, ...args).all()).results;
+export const uuid = () => crypto.randomUUID();
+export const token = () => uuid().replaceAll('-', '');
+export const json = (body, status = 200, headers = {}) => Response.json(body, { status, headers: { 'cache-control': 'no-store', ...headers } });
+export const error = (message, status = 400) => json({ error: message }, status);
+export const text = (value, max = 100) => typeof value === 'string' ? value.trim().slice(0, max) : '';

@@ -1,9 +1,9 @@
-import { DAY, IST, localDay, rows } from './worker.ts';
+import { DAY, IST, localDay, rows } from './shared.ts';
 
 export async function refillLevels(env, profile = null, snapshot = null) {
   return rows(env, `SELECT r.*, m.profile, m.name, m.time, m.start_day, m.end_day,
     m.interval_days, m.skip_dates, m.effective,
-    (SELECT COUNT(*) FROM doses d WHERE d.medication = m.id AND d.taken_at > r.recorded_at
+    (SELECT COUNT(*) FROM doses d WHERE d.medication = m.id AND d.taken_at IS NOT NULL AND d.taken_at > r.recorded_at
       AND d.cancelled = 0 AND d.demo = 0) AS consumed
     FROM refills r JOIN medications m ON m.id = r.medication
     WHERE m.active = 1 AND (CAST(? AS TEXT) IS NULL OR m.profile = ?)

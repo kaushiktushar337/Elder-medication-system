@@ -2,6 +2,13 @@
 
 CareCircle is a hackathon demo for older adults and their care circles. It combines a daily medication alarm, appointment reminders, patient-approved access, and an “I’ll call” handoff for unconfirmed doses.
 
+## Project structure
+
+- [public/](public/) contains the browser dashboards, Hindi translations, display preferences, and local audio clips. Vercel serves it and forwards same-origin API requests to Render.
+- [src/worker.ts](src/worker.ts) handles sign-in, patient access, and API routing. [src/appointments.ts](src/appointments.ts) handles appointment requests, scheduling, and visit follow-through.
+- [src/reminders.ts](src/reminders.ts) materializes scheduled doses and runs the reminder scheduler. It keys deliveries by event, reminder type, recipient, and channel to prevent duplicate sends on concurrent runs.
+- [migrations/](migrations/) defines the shared SQLite and PostgreSQL schema. [scripts/server.mjs](scripts/server.mjs) runs the API and scheduler.
+
 ## Run locally
 
 Install Node.js 24, then run:
@@ -74,7 +81,7 @@ In **Refills**, record the number of doses physically on hand and choose a thres
 
 In **Appointments**, patients can add questions for the assigned doctor or request a change for an upcoming visit. **Today** offers the same action when an appointment is coming up that day. Enter a reason and the next time you are available in IST. The original time remains scheduled until the doctor accepts. Visit questions, change reasons and summaries are visible to the patient and assigned doctor. **Schedule** shows who last saved a medication schedule and when it takes effect.
 
-Select **हिन्दी** or **Larger text** in the header to change the display on this browser. The Hindi setting covers the main navigation and common patient actions. Use **Schedule → Medication photo** to upload a picture of the medication packaging or label. CareCircle resizes it in the browser and shows it beside the next dose on Today. The photo is a visual reference for the saved schedule.
+Select **हिन्दी**, **Larger text**, or **Dark mode** in the header to change the display on this browser. Hindi applies to interface text such as appointment status and validation messages. Use **Schedule → Medication photo** to upload a picture of the medication packaging or label. CareCircle resizes it in the browser and shows it beside the next dose on Today. The photo is a visual reference for the saved schedule.
 
 **Read today aloud** uses a local English voice when one is available. Otherwise, it plays bundled English clips that describe due, overdue, or upcoming doses and whether an appointment is coming up. Exact medication names and times remain visible on Today. The fallback never sends care details to a speech service.
 
@@ -82,4 +89,8 @@ Under **People & access → Handoff escalation**, the patient can choose two lin
 
 To send one live reminder for a synthetic missed dose, configure `BREVO_API_KEY` and `BREVO_FROM_EMAIL` in the ignored `.env` file. Optionally set `BREVO_TEST_EMAIL` to your test inbox. Run `node --env-file=.env scripts/smoke-brevo-reminder.mjs --send`. The script uses an isolated database and otherwise sends the test back to the sender address.
 
-The test suite exercises the API with a test sender. To run it against an embedded PostgreSQL runtime, install `@electric-sql/pglite` temporarily with `npm install --no-save --package-lock=false @electric-sql/pglite` and set `TEST_POSTGRES=1` before running `npm test`.
+## Verify changes locally
+
+Run `npm test` with Node.js 24. The suite uses synthetic accounts and a test sender. It checks cross-patient access, single-use invitations, appointment changes, alternating and skipped doses, refill forecasts, concurrent reminder deduplication, and handoff escalation. It also checks that generating a three-day dose window takes one SQL statement.
+
+To run the API integration tests on embedded PostgreSQL, install `@electric-sql/pglite` temporarily with `npm install --no-save --package-lock=false @electric-sql/pglite` and set `TEST_POSTGRES=1` before running `npm test`.

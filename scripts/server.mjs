@@ -53,7 +53,8 @@ for (const clip of ['due', 'overdue', 'upcoming', 'complete', 'no-doses', 'appoi
 const securityHeaders = {
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'no-referrer',
-  'x-frame-options': 'DENY'
+  'x-frame-options': 'DENY',
+  'content-security-policy': "default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
 };
 
 const server = createServer(async (incoming, outgoing) => {

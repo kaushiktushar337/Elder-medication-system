@@ -49,6 +49,7 @@ main { max-width: 1200px; margin: auto; padding: 30px 30px 68px; }
 .inbox-invite select { max-width: 20rem; }
 h1, h2, p { margin: 0; }
 h1 { font: 750 clamp(2rem, 4.9vw, 3.4rem)/1.08 "Inter", system-ui, sans-serif; letter-spacing: -.048em; overflow-wrap: anywhere; }
+.view h1[tabindex] { scroll-margin-top: 11rem; }
 .auth-intro h1 { max-width: 13ch; margin: 0 0 17px; }
 h2 { font: 700 1.18rem/1.35 "Inter", system-ui, sans-serif; letter-spacing: -.025em; }
 p { color: var(--muted); }
@@ -184,6 +185,7 @@ dialog p, dialog input { margin: 10px 0; }
   .topbar-inner { grid-template-columns: minmax(0, 1fr); }
   .display-settings { justify-content: flex-start; }
   .display-settings > * { padding-inline: 9px; }
+  .view h1[tabindex] { scroll-margin-top: 1rem; }
 }
 @media screen {
   :root[data-theme="dark"] { color-scheme: dark; --ink: #e7f2f5; --muted: #afc2cc; --paper: #101b22; --surface: #192a34; --line: #395260; --green: #a1e6ce; --mint: #203e37; --cream: #493521; --shadow: 0 3px 12px #0003; }

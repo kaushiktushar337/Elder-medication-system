@@ -1,8 +1,30 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import worker, { remind } from '../src/worker.ts';
 import { database } from '../scripts/database.mjs';
+import { migrations } from '../scripts/migrations.mjs';
+import { materialize } from '../src/reminders.ts';
+
+test('dose generation uses one statement and preserves the patient scope and repeat rules', async () => {
+  const DB = database();
+  const morning = Date.parse('2026-11-15T12:00:00+05:30');
+  for (const profile of ['a', 'b']) {
+    await DB.prepare('INSERT INTO profiles(id, name, email) VALUES (?, ?, ?)').bind(profile, profile, '').run();
+    await DB.prepare(`INSERT INTO medications (id, profile, name, amount, time, effective, interval_days, start_day, skip_dates)
+      VALUES (?, ?, 'Sample', 'One', '08:00', 0, 2, ?, '')`)
+      .bind(profile, profile, Date.parse('2026-11-14T00:00:00+05:30')).run();
+  }
+  let statements = 0;
+  const tracked = { prepare(sql) { statements++; return DB.prepare(sql); } };
+  await materialize({ DB: tracked }, morning, 'a');
+  assert.equal(statements, 1);
+  const doses = () => DB.prepare('SELECT medication, due FROM doses ORDER BY medication, due').bind().all();
+  const past = Date.parse('2026-11-14T08:00:00+05:30');
+  const future = Date.parse('2026-11-16T08:00:00+05:30');
+  assert.deepEqual((await doses()).results.map(dose => [dose.medication, dose.due]), [['a', past], ['a', future]]);
+  await materialize({ DB }, morning);
+  assert.deepEqual((await doses()).results.map(dose => [dose.medication, dose.due]), [['a', past], ['a', future], ['b', past], ['b', future]]);
+});
 
 test('passcodes, scoped access, reminder deduplication and handoff', async (context) => {
   context.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-15T07:50:00+05:30') });
@@ -12,16 +34,7 @@ test('passcodes, scoped access, reminder deduplication and handoff', async (cont
     const { postgresQueries } = await import('../scripts/postgres.mjs');
     const pg = new PGlite();
     context.after(() => pg.close());
-    await pg.exec(await readFile(new URL('../migrations/0001_initial.sql', import.meta.url), 'utf8'));
-    await pg.exec(await readFile(new URL('../migrations/0002_checkins.sql', import.meta.url), 'utf8'));
-    await pg.exec(await readFile(new URL('../migrations/0003_accounts.sql', import.meta.url), 'utf8'));
-    await pg.exec(await readFile(new URL('../migrations/0004_login.sql', import.meta.url), 'utf8'));
-    await pg.exec(await readFile(new URL('../migrations/0005_care_plans.sql', import.meta.url), 'utf8'));
-    await pg.exec(await readFile(new URL('../migrations/0006_invites.sql', import.meta.url), 'utf8'));
-    await pg.exec(await readFile(new URL('../migrations/0007_refills_handoff.sql', import.meta.url), 'utf8'));
-    await pg.exec(await readFile(new URL('../migrations/0008_appointment_followthrough.sql', import.meta.url), 'utf8'));
-    await pg.exec(await readFile(new URL('../migrations/0009_workspaces.sql', import.meta.url), 'utf8'));
-    await pg.exec(await readFile(new URL('../migrations/0010_accessible_medication.sql', import.meta.url), 'utf8'));
+    for (const { sql } of migrations) await pg.exec(sql);
     const wrap = db => ({ query: async (sql, args) => {
       const result = await db.query(sql, args);
       return { ...result, rowCount: result.affectedRows ?? result.rows.length };
@@ -184,7 +197,8 @@ test('passcodes, scoped access, reminder deduplication and handoff', async (cont
   for (const day of [16, 17, 18, 19, 20]) await remind(env, Date.parse('2026-11-' + day + 'T07:50:00+05:30'), send);
   const planned = await DB.prepare('SELECT due FROM doses WHERE medication = ? AND cancelled = 0 ORDER BY due').bind(pattern.data.id).all();
   assert.deepEqual(planned.results.map(item => new Date(item.due + 330 * 60_000).toISOString().slice(0, 10)), ['2026-11-15', '2026-11-19']);
-  const secondAppointment = await api('appointments', { name: 'Provider test', due: Date.now() + 6 * 60_000 }, helper.cookie);
+  const providerTestDue = Date.now() + 6 * 60_000;
+  const secondAppointment = await api('appointments', { name: 'Provider test', due: providerTestDue }, helper.cookie);
   assert.equal(secondAppointment.status, 201);
   assert.equal((await api(`contacts/${invite.data.id}/revoke`, {}, owner.cookie)).status, 200);
   assert.equal((await api('state', undefined, helper.cookie)).status, 404);
@@ -211,6 +225,9 @@ test('passcodes, scoped access, reminder deduplication and handoff', async (cont
     item.event.startsWith(secondAppointment.data.id) && item.recipient === 'elder@example.com');
   assert.equal(unknown.state, 'review');
   assert.equal(unknown.attempts, 1);
+  const notifyRevoked = await DB.prepare("SELECT 1 FROM deliveries WHERE event = ? AND recipient = 'dev@example.com'")
+    .bind(secondAppointment.data.id + '-' + providerTestDue).first();
+  assert.equal(notifyRevoked, null);
   const oldCode = 'abcdef0123456789abcdef0123456789';
   const oldDigest = Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(oldCode))).toString('hex');
   await DB.prepare('INSERT INTO profiles (id, name, email) VALUES (?, ?, ?)').bind('legacy-profile', 'Legacy patient', '').run();

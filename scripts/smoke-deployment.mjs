@@ -8,6 +8,7 @@ const request = (path, init = {}) => fetch(new URL(path, base), { ...options, ..
 const frontend = await request('/');
 assert.equal(frontend.status, 200, 'Frontend did not return HTTP 200.');
 assert.match(await frontend.text(), /<title>CareCircle/, 'Unexpected frontend.');
+assert.match(frontend.headers.get('content-security-policy') || '', /frame-ancestors 'none'/i);
 const health = await request('/api/health');
 assert.equal(health.status, 200, 'The Vercel rewrite or Render readiness check failed.');
 assert.deepEqual(await health.json(), { ok: true });

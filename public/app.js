@@ -2,8 +2,17 @@ import { initPreferences, inHindi, locale, tr } from './language.js';
 
 const byId = id => document.getElementById(id);
 const timeOptions = { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit' };
-const time = value => new Intl.DateTimeFormat(locale(), timeOptions).format(value);
-const date = value => new Intl.DateTimeFormat(locale(), { timeZone: 'Asia/Kolkata', weekday: 'long', day: 'numeric', month: 'long' }).format(value);
+const dateOptions = { timeZone: 'Asia/Kolkata', weekday: 'long', day: 'numeric', month: 'long' };
+const formatters = new Map();
+function format(value, options) {
+  const language = locale();
+  if (!formatters.has(language)) {
+    formatters.set(language, new Map([timeOptions, dateOptions].map(option => [option, new Intl.DateTimeFormat(language, option)])));
+  }
+  return formatters.get(language).get(options).format(value);
+}
+const time = value => format(value, timeOptions);
+const date = value => format(value, dateOptions);
 const dayTime = value => date(value) + ' · ' + time(value);
 const safe = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const label = value => safe(tr(value));
@@ -18,6 +27,8 @@ let careTeam = false;
 let activeView = 'today';
 let syncedAt = 0;
 let refreshQueue = Promise.resolve();
+let pendingRefreshes = 0;
+let nextTodayUpdate = Infinity;
 let audio;
 let armed = false;
 let speech;
@@ -83,7 +94,7 @@ async function api(path, method = 'GET', body) {
   const result = await response.json();
   if (!response.ok) {
     if (response.status === 401 && !['login', 'legacy-login'].includes(path)) auth();
-    throw new Error(result.error || 'Request failed.');
+    throw Object.assign(new Error(result.error || 'Request failed.'), { status: response.status });
   }
   return result;
 }
@@ -143,6 +154,7 @@ function setView(view) {
 }
 
 function refresh() {
+  pendingRefreshes++;
   const request = refreshQueue.then(async () => {
     const { patients, account, inbox = [], visits = [] } = await api('patients');
     careTeam = account.kind === 'care-team';
@@ -189,7 +201,7 @@ function refresh() {
     let nextState;
     try { nextState = await api('state'); }
     catch (error) {
-      if (selected === activePatient) selectPatient('');
+      if (error.status === 404 && selected === activePatient) selectPatient('');
       throw error;
     }
     if (selected !== activePatient) return;
@@ -199,7 +211,7 @@ function refresh() {
     byId('navigation').hidden = false;
     setView(activeView);
     render();
-  });
+  }).finally(() => pendingRefreshes--);
   refreshQueue = request.catch(() => {});
   return request;
 }
@@ -430,6 +442,13 @@ function todayAppointment() {
 function renderToday() {
   const current = now();
   const today = todaysDoses();
+  // Between these times the visible dose and appointment statuses stay the same.
+  nextTodayUpdate = state.appointments.find(item => item.due > current)?.due ?? Infinity;
+  for (const dose of state.doses) {
+    if (dose.taken_at || dose.demo) continue;
+    const transition = current < dose.due ? dose.due : dose.due + grace();
+    if (transition > current) nextTodayUpdate = Math.min(nextTodayUpdate, transition);
+  }
   const due = today.filter(dose => !dose.taken_at && dose.due <= current && current < dose.due + grace(dose));
   const next = due[0] ?? today.find(dose => !dose.taken_at && dose.due > current);
   const appointment = state.appointments.find(item => item.due > current);
@@ -668,8 +687,9 @@ byId('sound').addEventListener('click', async () => {
     try {
       audio ??= new AudioContext();
       await audio.resume();
-      tone(audio.destination);
       armed = true;
+      renderToday();
+      if (!alarmTimer) tone(audio.destination);
       notice('Alarm sound enabled. Due doses can ring for up to 30 seconds on this open page.');
     } catch { notice('Sound is unavailable. On-screen alerts are active.', true); }
   }
@@ -981,6 +1001,9 @@ document.addEventListener('click', event => {
   if (control.dataset.view) {
     notice();
     setView(control.dataset.view);
+    const heading = byId(control.dataset.view).querySelector('h1');
+    heading.tabIndex = -1;
+    heading.focus();
   }
   const { action, id } = control.dataset;
   if (!action) return;
@@ -1073,9 +1096,11 @@ initPreferences(() => {
 });
 byId('read-today').textContent = tr('Read today aloud');
 byId('sound').textContent = tr('Enable alarm sound');
-const sync = () => refresh().catch(error => { if (state) notice(error.message, true); });
+const sync = () => {
+  if (!pendingRefreshes) refresh().catch(error => { if (state) notice(error.message, true); });
+};
 byId('print-report').addEventListener('click', () => window.print());
-setInterval(() => { if (state && !document.hidden) renderToday(); }, 1000);
+setInterval(() => { if (state && !document.hidden && now() >= nextTodayUpdate) renderToday(); }, 1000);
 setInterval(() => { if (!byId('logout').hidden && !document.hidden) sync(); }, 8000);
 document.addEventListener('visibilitychange', () => { if (!byId('logout').hidden && !document.hidden) sync(); });
 window.addEventListener('pagehide', () => { stopReading(); stopAlarm(); });

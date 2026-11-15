@@ -12,7 +12,6 @@
     "test": "node --test"
   },
   "dependencies": {
-    "build": "^0.1.4",
     "pg": "8.23.1"
   }
 }

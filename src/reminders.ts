@@ -1,19 +1,25 @@
-import { DAY, IST, MINUTE, grace, localDay, query, rows } from './worker.ts';
+import { DAY, IST, MINUTE, grace, localDay, query, rows } from './shared.ts';
 import { refillForecast, refillLevels, remaining } from './refills.ts';
 
 export async function materialize(env, now, profile = null) {
   const start = localDay(now);
-  for (const day of [start - DAY, start, start + DAY]) {
-    await query(env, `INSERT INTO doses (id, profile, medication, name, amount, due)
-      SELECT id || '-' || CAST(first_minute + CAST(? AS BIGINT) AS TEXT), profile, id, name, amount, first_minute + CAST(? AS BIGINT)
-      FROM (SELECT *, (CAST(substr(time, 1, 2) AS INTEGER) * 60 + CAST(substr(time, 4, 2) AS INTEGER)) * 60000 AS first_minute
-            FROM medications WHERE active = 1 AND (CAST(? AS TEXT) IS NULL OR profile = ?)) AS schedule
-      WHERE first_minute + CAST(? AS BIGINT) >= effective
-        AND (start_day IS NULL OR (start_day <= ? AND ((CAST(? AS BIGINT) - start_day) / 86400000) % interval_days = 0))
-        AND (end_day IS NULL OR end_day >= ?) AND skip_dates NOT LIKE ?
-      ON CONFLICT(medication, due) DO UPDATE SET cancelled = 0, name = excluded.name, amount = excluded.amount
-      WHERE doses.cancelled = 1`, day, day, profile, profile, day, day, day, day, '%|' + new Date(day + IST).toISOString().slice(0, 10) + '|%').run();
-  }
+  const days = [start - DAY, start, start + DAY].flatMap(day =>
+    [day, '%|' + new Date(day + IST).toISOString().slice(0, 10) + '|%']);
+  return query(env, `WITH days(day, skip) AS (
+      VALUES (CAST(? AS BIGINT), CAST(? AS TEXT)), (CAST(? AS BIGINT), CAST(? AS TEXT)), (CAST(? AS BIGINT), CAST(? AS TEXT))
+    ), schedule AS (
+      SELECT m.id, m.profile, m.name, m.amount, m.effective,
+        days.day + (CAST(substr(m.time, 1, 2) AS INTEGER) * 60 + CAST(substr(m.time, 4, 2) AS INTEGER)) * 60000 AS due
+      FROM medications m CROSS JOIN days
+      WHERE m.active = 1 ${profile === null ? '' : 'AND m.profile = ?'}
+        AND (m.start_day IS NULL OR (m.start_day <= days.day AND ((days.day - m.start_day) / 86400000) % m.interval_days = 0))
+        AND (m.end_day IS NULL OR m.end_day >= days.day) AND m.skip_dates NOT LIKE days.skip
+    )
+    INSERT INTO doses (id, profile, medication, name, amount, due)
+    SELECT id || '-' || CAST(due AS TEXT), profile, id, name, amount, due
+    FROM schedule WHERE due >= effective
+    ON CONFLICT(medication, due) DO UPDATE SET cancelled = 0, name = excluded.name, amount = excluded.amount
+    WHERE doses.cancelled = 1`, ...days, ...(profile === null ? [] : [profile])).run();
 }
 
 const titles = {
@@ -89,16 +95,37 @@ async function recipients(env, event, now) {
     return careTeam.filter(item => item.email).map(item => ({ to: item.email, channel: 'email' }));
   }
   const person = await query(env, 'SELECT email FROM profiles WHERE id = ?', profile).first();
-  const contacts = kind === 'upcoming' ? [] : await rows(env, 'SELECT c.email, c.phone FROM contacts c LEFT JOIN members m ON m.id = c.member WHERE c.profile = ? AND c.alerts = 1 AND m.declined_at IS NULL', profile);
+  const contacts = kind === 'upcoming' ? [] : await rows(env, `SELECT c.email, c.phone FROM contacts c LEFT JOIN members m ON m.id = c.member
+    WHERE c.profile = ? AND c.alerts = 1 AND m.declined_at IS NULL AND (m.id IS NULL OR m.revoked = 0)`, profile);
   const email = new Set([kind === 'checkin' ? '' : person.email, ...contacts.map(contact => contact.email)].filter(Boolean));
   const sms = env.BREVO_SMS_SENDER && new Set(contacts.map(contact => contact.phone).filter(Boolean));
   return [...Array.from(email, to => ({ to, channel: 'email' })), ...(sms ? Array.from(sms, to => ({ to, channel: 'sms' })) : [])];
 }
 
+async function eventIsCurrent(env, event, now) {
+  const { id, kind } = event;
+  if (kind === 'appointment_change') {
+    return query(env, "SELECT 1 FROM appointment_requests WHERE id = ? AND proposal_state = 'pending' AND proposed_at = ? AND due > ? AND proposed_due > ?", id, event.proposed_at, now, now).first();
+  }
+  if (kind === 'appointment_request') {
+    return query(env, "SELECT 1 FROM appointment_requests WHERE id = ? AND status = 'pending'", id).first();
+  }
+  if (kind === 'appointment') {
+    return event.status === 'scheduled'
+      ? query(env, "SELECT 1 FROM appointment_requests WHERE id = ? AND status = 'scheduled' AND due = ?", id, event.due).first()
+      : query(env, 'SELECT 1 FROM appointments WHERE id = ? AND due = ?', id, event.due).first();
+  }
+  if (kind === 'checkin' || kind === 'checkin_backup') {
+    return query(env, 'SELECT 1 FROM checkins WHERE id = ? AND claimed_at IS NULL AND completed_at IS NULL', id).first();
+  }
+  if (kind === 'refill') return true; // The recipient lookup rechecks the refill snapshot and remaining stock.
+  return query(env, 'SELECT 1 FROM doses WHERE id = ? AND cancelled = 0 AND taken_at IS NULL AND claimed_at IS NULL', id).first();
+}
+
 export async function remind(env, now = Date.now(), send = message => deliver(env, message)) {
   await materialize(env, now);
   await query(env, "UPDATE deliveries SET state = 'review' WHERE state = 'sending' AND attempted <= ?", now - 5 * MINUTE).run();
-  const doses = await rows(env, 'SELECT id, profile, due FROM doses WHERE demo = 0 AND cancelled = 0 AND taken_at IS NULL AND due BETWEEN ? AND ? ORDER BY due', now - DAY, now + 15 * MINUTE);
+  const doses = await rows(env, 'SELECT id, profile, due FROM doses WHERE demo = 0 AND cancelled = 0 AND taken_at IS NULL AND claimed_at IS NULL AND due BETWEEN ? AND ? ORDER BY due', now - DAY, now + 15 * MINUTE);
   const appointments = await rows(env, 'SELECT id, profile, due FROM appointments WHERE due > ? AND due <= ? ORDER BY due', now, now + DAY);
   const requests = await rows(env, "SELECT id, profile, doctor, due, status FROM appointment_requests WHERE (status = 'pending' AND requested_at BETWEEN ? AND ?) OR (status = 'scheduled' AND due BETWEEN ? AND ?)", now - DAY, now, now, now + DAY);
   const proposals = await rows(env, "SELECT id, profile, doctor, proposed_at FROM appointment_requests WHERE proposal_state = 'pending' AND due > ? AND proposed_due > ? AND proposed_at >= ?", now, now, now - DAY);
@@ -125,16 +152,7 @@ export async function remind(env, now = Date.now(), send = message => deliver(en
         WHERE deliveries.state IN ('retry', 'unconfigured') AND deliveries.attempts < 3 AND deliveries.attempted <= ?
         RETURNING attempts`, event.profile, ...keys, now, now - MINUTE).first();
       if (!reserved) continue;
-      const current = event.kind === 'appointment_change'
-        ? await query(env, "SELECT 1 FROM appointment_requests WHERE id = ? AND proposal_state = 'pending' AND proposed_at = ? AND due > ? AND proposed_due > ?", event.id, event.proposed_at, now, now).first()
-        : event.doctor
-        ? await query(env, 'SELECT 1 FROM appointment_requests WHERE id = ? AND status = ?', event.id, event.status).first()
-        : event.kind === 'appointment'
-        ? await query(env, 'SELECT 1 FROM appointments WHERE id = ? AND due = ?', event.id, event.due).first()
-        : ['checkin', 'checkin_backup'].includes(event.kind)
-          ? await query(env, 'SELECT 1 FROM checkins WHERE id = ? AND claimed_at IS NULL AND completed_at IS NULL', event.id).first()
-          : event.kind === 'refill' ? true
-            : await query(env, 'SELECT 1 FROM doses WHERE id = ? AND cancelled = 0 AND taken_at IS NULL AND (? = 0 OR claimed_at IS NULL)', event.id, Number(['unconfirmed', 'dose_backup'].includes(event.kind))).first();
+      const current = await eventIsCurrent(env, event, now);
       const active = current && (await recipients(env, event, now)).some(candidate => candidate.channel === recipient.channel && candidate.to === recipient.to);
       let state = 'suppressed';
       if (active) {
