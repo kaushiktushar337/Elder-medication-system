@@ -27,6 +27,16 @@ main { max-width: 1200px; margin: auto; padding: 30px 30px 68px; }
 .auth-intro { display: grid; align-content: end; padding: clamp(27px, 6vw, 65px); border-radius: 25px; color: white; background: radial-gradient(ellipse at 102% 0%, #287d77, transparent 61%), linear-gradient(145deg, #102d42, #14474a); min-height: 370px; }
 .auth-intro p { max-width: 36ch; font-size: 1.15rem; color: #e4f0e9; }
 .auth-card { align-self: center; }
+.auth-switch { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; padding: 5px; border-radius: 13px; background: #edf3f7; margin-bottom: 20px; }
+.auth-switch .quiet { min-width: 0; padding-inline: 5px; border-color: transparent; background: transparent; font-size: .9rem; }
+.auth-switch [aria-pressed="true"] { background: var(--surface); box-shadow: var(--shadow); border-color: #d4e2e8; }
+.auth-legacy { color: var(--green); background: transparent; border: none; text-decoration: underline; padding: 9px 0; margin-top: 12px; }
+.back-patients { margin-bottom: 14px; }
+.workspace-panel { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: 15px; min-width: 0; }
+.workspace-panel h2 { margin-bottom: 9px; }
+.inbox-invite { padding-block: 12px; border-bottom: 1px solid var(--line); }
+.inbox-invite h3 { margin: 0; }
+.inbox-invite select { max-width: 20rem; }
 h1, h2, p { margin: 0; }
 h1 { font: 750 clamp(2rem, 4.9vw, 3.4rem)/1.08 "Inter", system-ui, sans-serif; letter-spacing: -.048em; overflow-wrap: anywhere; }
 .auth-intro h1 { max-width: 13ch; margin: 0 0 17px; }
@@ -139,7 +149,7 @@ summary { cursor: pointer; font-weight: 700; min-height: 26px; }
 dialog { width: min(440px, calc(100% - 28px)); border: 1px solid var(--line); border-radius: 18px; padding: 23px; }
 dialog::backdrop { background: #19292399; }
 dialog p, dialog input { margin: 10px 0; }
-@media (max-width: 850px) {
+@media (max-width: 1000px) {
   .topbar-inner { flex-wrap: wrap; justify-content: space-between; gap: 5px 12px; padding: 9px 15px; }
   nav { order: 3; width: 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
   nav button { padding-inline: 5px; font-size: .95rem; }

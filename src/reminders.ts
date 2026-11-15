@@ -28,25 +28,6 @@ const titles = {
   appointment: 'An appointment is coming up'
 };
 
-export async function sendInviteEmail(env, recipient, key) {
-  if (!env.BREVO_API_KEY || !env.BREVO_FROM_EMAIL || !env.APP_URL) return 'unconfigured';
-  try {
-    const url = new URL('/', env.APP_URL);
-    url.hash = new URLSearchParams({ invite: key }).toString();
-    const result = await fetch('https://api.brevo.com/v3/smtp/email', {
-      method: 'POST', headers: { 'api-key': env.BREVO_API_KEY, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        sender: { name: 'CareCircle', email: env.BREVO_FROM_EMAIL },
-        to: [{ email: recipient }],
-        subject: 'You have a CareCircle invitation',
-        textContent: 'Open the invitation and sign in to a care-team account using this email. You can then accept or decline the invitation. The link expires after seven days.\n\n' + url.href
-      }),
-      signal: AbortSignal.timeout(7000)
-    });
-    return result.ok ? 'accepted' : result.status >= 500 ? 'review' : 'failed';
-  } catch { return 'review'; }
-}
-
 async function deliver(env, message) {
   if (!env.BREVO_API_KEY) return { state: 'unconfigured' };
   const sms = message.channel === 'sms';

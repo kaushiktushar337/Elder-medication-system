@@ -20,6 +20,11 @@ let alarmTimer;
 let alarmEnd;
 let alarmGain;
 let reviewedInvite = '';
+let accountSlot = '';
+try {
+  accountSlot = sessionStorage.getItem('carecircle.account-slot') || Array.from(crypto.getRandomValues(new Uint8Array(12)), byte => byte.toString(16).padStart(2, '0')).join('');
+  sessionStorage.setItem('carecircle.account-slot', accountSlot);
+} catch { /* Use the standard browser session when tab storage is unavailable. */ }
 let emailInviteKey = '';
 function readInviteFromLocation() {
   const key = new URLSearchParams(location.hash.slice(1)).get('invite');
@@ -57,11 +62,12 @@ function notice(message = '', error = false) {
 }
 
 async function api(path, method = 'GET', body) {
-  const accountRoutes = ['login', 'legacy-login', 'set-login', 'logout', 'profiles', 'accounts', 'patients', 'join'];
-  const suffix = accountRoutes.includes(path) ? '' : '?patient=' + encodeURIComponent(activePatient);
+  const accountRoutes = ['login', 'legacy-login', 'set-login', 'logout', 'profiles', 'accounts', 'patients', 'join', 'invitations'];
+  const suffix = accountRoutes.includes(path.split('/')[0]) ? '' : '?patient=' + encodeURIComponent(activePatient);
   const response = await fetch('/api/' + path + suffix, {
     method,
-    ...(method !== 'GET' && { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}) })
+    headers: { ...(accountSlot && { 'X-Care-Slot': accountSlot }), ...(method !== 'GET' && { 'Content-Type': 'application/json' }) },
+    ...(method !== 'GET' && { body: JSON.stringify(body ?? {}) })
   });
   if (!response.headers.get('content-type')?.includes('application/json')) {
     throw new Error('The care service may still be waking up. Try again in a moment.');
@@ -93,9 +99,26 @@ function auth() {
   byId('dashboard').hidden = true;
   byId('navigation').hidden = true;
   byId('logout').hidden = true;
+  setAuthForm('login-form');
   byId('passcode-dialog').close();
   for (const id of Object.keys(forms)) cancelEdit(byId(id));
 }
+
+function setAuthForm(id) {
+  for (const button of document.querySelectorAll('[data-auth]')) {
+    const selected = button.dataset.auth === id;
+    button.setAttribute('aria-pressed', String(selected));
+    byId(button.dataset.auth).hidden = !selected;
+  }
+}
+
+document.querySelector('.auth-card').addEventListener('click', event => {
+  const id = event.target.closest('[data-auth]')?.dataset.auth;
+  if (!id) return;
+  notice();
+  setAuthForm(id);
+  byId(id).querySelector('input')?.focus();
+});
 
 function setView(view) {
   if (view !== 'today') stopReading();
@@ -109,8 +132,10 @@ function setView(view) {
 
 function refresh() {
   const request = refreshQueue.then(async () => {
-    const { patients, account } = await api('patients');
+    const { patients, account, inbox = [], visits = [] } = await api('patients');
     careTeam = account.kind === 'care-team';
+    const doctorDashboard = account.workspace === 'doctor';
+    byId('access-nav').hidden = doctorDashboard;
     byId('access-nav').textContent = careTeam ? 'Care Circle' : 'People & access';
     byId('access-heading').textContent = careTeam ? 'Care Circle' : 'People & access';
     byId('auth').hidden = true;
@@ -126,13 +151,21 @@ function refresh() {
     }
     if (!patients.some(item => item.id === activePatient)) selectPatient(careTeam ? '' : patients[0]?.id || '');
     const selected = activePatient;
+    byId('patient-access').hidden = !careTeam || Boolean(selected);
+    byId('back-patients').hidden = !careTeam;
+    byId('back-patients').textContent = inbox.length ? '← Back to patient list · ' + inbox.length + ' new ' + (inbox.length === 1 ? 'invitation' : 'invitations') : '← Back to patient list';
+    byId('invitations-panel').hidden = !careTeam;
+    byId('doctor-visits-panel').hidden = !doctorDashboard;
+    show('invitations-list', inbox.map(invite => '<form class="inbox-invite" data-invite="' + safe(invite.id) + '"><h3>' + safe(invite.name) + '</h3><label>Your relationship<select name="relationship" required><option value="">Choose a relationship</option><option>Family</option><option>Caregiver</option><option>Doctor</option><option>Other</option></select></label><div class="actions"><button class="primary" value="accept">Accept</button><button class="quiet" value="decline" formnovalidate>Decline</button></div></form>').join('') || empty('No pending invitations.'));
+    show('doctor-visits-list', visits.map(visit => row(visit.patient_name, visit.name + ' · ' + (visit.status === 'pending' ? 'Awaiting scheduling' : dayTime(visit.due)),
+      '<button class="quiet" data-patient="' + safe(visit.patient) + '" data-destination="appointments">Open appointment</button>')).join('') || empty('No upcoming appointments or requests.'));
     show('patient-cards', patients.map(item => {
       const labels = [item.relationship];
       if (item.overdue) labels.push(item.overdue + ' overdue');
       if (item.pending) labels.push(item.pending + ' appointment ' + (item.pending === 1 ? 'request' : 'requests'));
       return '<button class="patient-card" data-patient="' + safe(item.id) + '" aria-pressed="' + (selected === item.id) + '" data-priority="' + (item.overdue ? 'overdue' : item.pending ? 'pending' : 'normal') + '"><strong>' + safe(item.name) + '</strong><span>' + safe(labels.filter(Boolean).join(' · ')) + '</span></button>';
     }).join(''));
-    byId('patient-heading').textContent = 'Care team · ' + account.name;
+    byId('patient-heading').textContent = (doctorDashboard ? 'Doctor dashboard' : 'Family & caregiver dashboard') + ' · ' + account.name;
     byId('patient-avatar').textContent = Array.from(account.name)[0]?.toUpperCase() || '•';
     if (!selected) {
       state = undefined;
@@ -417,10 +450,12 @@ function visitDetails(item) {
 function renderSchedule() {
   show('medication-list', state.medications.map(item => row(item.name, item.amount + ' · ' + item.time + ' IST · ' + (item.interval_days === 1 ? 'Daily' : 'Every ' + item.interval_days + ' days')
     + (item.updated_by ? ' · Updated by ' + item.updated_by + ' · Effective ' + dayTime(Math.max(item.effective, item.start_day || 0)) : ''), controls('medications', item))).join('') || empty('No medications yet.'));
-  byId('open-appointment').textContent = state.me.owner ? 'Request an appointment' : 'Open appointments';
-  byId('appointment-form').hidden = state.me.owner;
-  byId('request-appointment-form').hidden = !state.me.owner || !state.doctors.length;
-  byId('no-linked-doctors').hidden = !state.me.owner || Boolean(state.doctors.length);
+  const canRequest = state.me.canRequestAppointment ?? state.me.owner;
+  byId('open-appointment').textContent = canRequest ? 'Request an appointment' : 'Open appointments';
+  byId('appointment-form').hidden = state.me.relationship !== 'Doctor';
+  byId('request-appointment-form').hidden = !canRequest || !state.doctors.length;
+  byId('no-linked-doctors').hidden = !canRequest || Boolean(state.doctors.length);
+  byId('no-linked-doctors').textContent = state.me.owner ? 'Invite your doctor from People & access before requesting an appointment.' : 'Ask the patient to link their doctor before requesting an appointment.';
   show('doctor-picker', '<option value="">Choose doctor</option>' + state.doctors.map(doctor => '<option value="' + safe(doctor.id) + '">' + safe(doctor.name) + '</option>').join(''));
   show('today-request-status', state.me.owner ? state.requests.slice(0, 3).map(item => empty(item.name + ' · ' + (item.status === 'pending' ? 'Awaiting ' + item.doctor_name : item.status === 'scheduled' ? 'Scheduled for ' + dayTime(item.due) : item.status))).join('') : '');
   show('appointment-requests', state.requests.map(item => {
@@ -430,7 +465,7 @@ function renderSchedule() {
     return '<article class="visit-entry">' + row(item.name, description, actions) + visitDetails(item) + '</article>';
   }).join(''));
   const standalone = state.appointments.filter(item => !state.requests.some(request => request.id === item.id));
-  show('appointment-list', standalone.map(item => row(item.name, dayTime(item.due) + (item.location ? ' · ' + item.location : ''), !state.me.owner && !item.status ? controls('appointments', item) : '')).join('') || (state.requests.length ? '' : empty('No appointments scheduled.')));
+  show('appointment-list', standalone.map(item => row(item.name, dayTime(item.due) + (item.location ? ' · ' + item.location : ''), state.me.relationship === 'Doctor' && !item.status ? controls('appointments', item) : '')).join('') || (state.requests.length ? '' : empty('No appointments scheduled.')));
   show('week-plan', Array.from({ length: 7 }, (_, index) => {
     const day = state.start + index * dayLength;
     const schedule = state.medications.filter(item => {
@@ -523,7 +558,7 @@ byId('sound').addEventListener('click', async () => {
 
 function passcode(value, context, title = 'Save your sign-in code') {
   byId('passcode-title').textContent = title;
-  byId('passcode-value').value = value.match(/.{1,8}/g).join('-');
+  byId('passcode-value').value = value.length === 6 ? value : value.match(/.{1,8}/g).join('-');
   byId('passcode-context').textContent = context;
   byId('passcode-dialog').showModal();
 }
@@ -582,11 +617,8 @@ for (const [id, [entity]] of Object.entries(forms)) {
       const result = await api(entity + (edit ? '/' + edit : ''), edit ? 'PATCH' : 'POST', values);
       cancelEdit(form);
       await refresh();
-      if (result.passcode) {
-        const delivery = result.delivery === 'accepted' ? 'Brevo accepted the invitation email. '
-          : result.delivery ? 'Email delivery could not be confirmed. You can share the key privately. ' : 'Share the key privately. ';
-        passcode(result.passcode, delivery + 'The invitation can be used once and expires after seven days.', 'Patient invite key');
-      }
+      if (result.passcode) passcode(result.passcode, 'Share this code privately. It expires after 24 hours and can be used once.', 'Patient invite code');
+      else if (result.inApp) notice('Invitation sent to their CareCircle account.');
       else notice(edit ? 'Changes saved.' : 'Added successfully.');
     });
   });
@@ -622,11 +654,26 @@ function selectPatient(id) {
   activeView = 'today';
 }
 
-byId('patient-cards').addEventListener('click', event => {
+byId('patient-access').addEventListener('click', event => {
   const patient = event.target.closest('[data-patient]');
   if (!patient) return;
-  selectPatient(activePatient === patient.dataset.patient ? '' : patient.dataset.patient);
+  selectPatient(patient.dataset.patient);
+  if (patient.dataset.destination) activeView = patient.dataset.destination;
   refresh().catch(error => notice(error.message, true));
+});
+byId('back-patients').addEventListener('click', () => {
+  selectPatient('');
+  refresh().catch(error => notice(error.message, true));
+});
+byId('invitations-list').addEventListener('submit', event => {
+  event.preventDefault();
+  const form = event.target;
+  perform(event.submitter, async () => {
+    const decision = event.submitter.value;
+    await api('invitations/' + form.dataset.invite, 'POST', { ...formValues(form), decision });
+    await refresh();
+    notice(decision === 'accept' ? 'Invitation accepted. The patient is now in your list.' : 'Invitation declined.');
+  });
 });
 byId('refill-cards').addEventListener('submit', event => {
   event.preventDefault();

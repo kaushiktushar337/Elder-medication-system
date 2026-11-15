@@ -10,8 +10,8 @@ const port = Number(process.env.PORT || 3000);
 const path = process.env.DATABASE_PATH || '.local/carecircle.sqlite';
 const appUrl = process.env.APP_URL?.trim().replace(/\/$/, '');
 const backendUrl = process.env.RENDER_EXTERNAL_URL || 'http://localhost:' + port;
-if (hosted && (!process.env.PROFILE_SETUP_KEY || !process.env.DATABASE_URL || !appUrl)) {
-  throw new Error('Set PROFILE_SETUP_KEY, DATABASE_URL, and APP_URL before starting on Render.');
+if (hosted && (!process.env.DATABASE_URL || !appUrl)) {
+  throw new Error('Set DATABASE_URL and APP_URL before starting on Render.');
 }
 if (hosted) {
   const origin = new URL(appUrl);
@@ -26,6 +26,9 @@ if (process.env.DATABASE_URL) {
     DB = await postgres(process.env.DATABASE_URL, process.env.SUPABASE_DB_CA, process.env.SUPABASE_TLS_MODE);
   } catch (error) {
     console.error('Supabase connection or migration failed', error.code || error.name);
+    if (['SELF_SIGNED_CERT_IN_CHAIN', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY'].includes(error.code)) {
+      console.error('Supabase certificate verification failed. Set SUPABASE_DB_CA to the project CA in PEM format or set NODE_EXTRA_CA_CERTS to the path of the CA file on this service.');
+    }
     process.exit(1);
   }
 } else {

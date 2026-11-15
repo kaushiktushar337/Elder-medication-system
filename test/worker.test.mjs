@@ -20,6 +20,7 @@ test('passcodes, scoped access, reminder deduplication and handoff', async (cont
     await pg.exec(await readFile(new URL('../migrations/0006_invites.sql', import.meta.url), 'utf8'));
     await pg.exec(await readFile(new URL('../migrations/0007_refills_handoff.sql', import.meta.url), 'utf8'));
     await pg.exec(await readFile(new URL('../migrations/0008_appointment_followthrough.sql', import.meta.url), 'utf8'));
+    await pg.exec(await readFile(new URL('../migrations/0009_workspaces.sql', import.meta.url), 'utf8'));
     const wrap = db => ({ query: async (sql, args) => {
       const result = await db.query(sql, args);
       return { ...result, rowCount: result.affectedRows ?? result.rows.length };
@@ -28,15 +29,11 @@ test('passcodes, scoped access, reminder deduplication and handoff', async (cont
   } else {
     DB = database();
   }
-  const invitationEmails = [];
-  const env = { DB, sendInviteEmail: async (_env, to, key) => {
-    invitationEmails.push({ to, key });
-    return 'accepted';
-  } };
+  const env = { DB, PROFILE_SETUP_KEY: 'ignored legacy setting' };
   const selected = new Map();
-  async function api(path, body, cookie, method = body ? 'POST' : 'GET', origin, patient = selected.get(cookie)) {
+  async function api(path, body, cookie, method = body ? 'POST' : 'GET', origin, patient = selected.get(cookie), slot) {
     const response = await worker.fetch(new Request(`https://care.test/api/${path}${patient ? '?patient=' + patient : ''}`, {
-      method, headers: { ...(body && { 'content-type': 'application/json' }), ...(cookie && { cookie }), ...(origin && { origin }) },
+      method, headers: { ...(body && { 'content-type': 'application/json' }), ...(cookie && { cookie }), ...(origin && { origin }), ...(slot && { 'x-care-slot': slot }) },
       body: body && JSON.stringify(body)
     }), env);
     return { status: response.status, data: await response.json(), cookie: response.headers.get('set-cookie')?.split(';')[0] };
@@ -58,6 +55,7 @@ test('passcodes, scoped access, reminder deduplication and handoff', async (cont
   const [{ id: patient }] = (await api('patients', undefined, owner.cookie)).data.patients;
   selected.set(owner.cookie, patient);
   const invite = await api('contacts', { name: 'Dev', email: 'dev@example.com', alerts: true, invite: true }, owner.cookie);
+  assert.match(invite.data.passcode, /^[A-Z0-9]{6}$/);
   assert.equal((await api('legacy-login', { passcode: invite.data.passcode })).status, 401);
   const signup = await api('accounts', { name: 'Dev', email: 'doctor@example.com', password });
   assert.equal(signup.status, 201);
@@ -70,22 +68,34 @@ test('passcodes, scoped access, reminder deduplication and handoff', async (cont
   const [{ id: otherPatient }] = (await api('patients', undefined, other.cookie)).data.patients;
   selected.set(other.cookie, otherPatient);
   assert.equal((await api('contacts', { name: 'Other', email: 'OTHER@example.com', emailInvite: true }, owner.cookie)).status, 409);
+  assert.equal((await api('contacts', { email: 'no-account@example.com', emailInvite: true }, owner.cookie)).status, 404);
   const emailed = await api('contacts', { name: 'Doctor', email: 'doctor@example.com', emailInvite: true }, other.cookie);
-  assert.equal(emailed.data.delivery, 'accepted');
-  assert.deepEqual(invitationEmails, [{ to: 'doctor@example.com', key: emailed.data.passcode }]);
+  assert.equal(emailed.data.inApp, true);
+  assert.equal(emailed.data.passcode, null);
   assert.equal((await api('contacts', { name: 'Doctor', email: 'doctor@example.com', emailInvite: true }, other.cookie)).status, 409);
-  assert.equal((await api('join', { key: emailed.data.passcode, decision: 'preview' }, owner.cookie)).status, 403);
   const unrelated = await api('accounts', { name: 'Unrelated', email: 'unrelated@example.com', password });
-  assert.equal((await api('join', { key: emailed.data.passcode, decision: 'preview' }, unrelated.cookie)).status, 404);
-  assert.equal((await api('join', { key: emailed.data.passcode, decision: 'preview' }, helper.cookie)).data.name, 'Other');
-  assert.equal((await api('join', { key: emailed.data.passcode, decision: 'decline' }, helper.cookie)).status, 200);
-  assert.equal((await api('join', { key: emailed.data.passcode, relationship: 'Doctor' }, helper.cookie)).status, 404);
+  const [firstInbox] = (await api('patients', undefined, helper.cookie)).data.inbox;
+  assert.equal(firstInbox.name, 'Other');
+  assert.equal((await api('invitations/' + firstInbox.id, { decision: 'decline' }, unrelated.cookie)).status, 404);
+  assert.equal((await api('invitations/' + firstInbox.id, { decision: 'decline' }, helper.cookie)).status, 200);
+  assert.equal((await api('invitations/' + firstInbox.id, { decision: 'accept', relationship: 'Doctor' }, helper.cookie)).status, 404);
   assert.ok((await api('state', undefined, other.cookie)).data.contacts.find(item => item.id === emailed.data.id).declined_at);
-  const secondEmail = await api('contacts', { name: 'Dev', email: 'doctor@example.com', emailInvite: true }, other.cookie);
-  assert.equal((await api('join', { key: secondEmail.data.passcode, decision: 'accept', relationship: 'Doctor' }, helper.cookie)).status, 201);
+  assert.equal((await api('contacts', { email: 'doctor@example.com', emailInvite: true }, other.cookie)).status, 201);
+  const [secondInbox] = (await api('patients', undefined, helper.cookie)).data.inbox;
+  assert.equal((await api('invitations/' + secondInbox.id, { decision: 'accept', relationship: 'Doctor' }, helper.cookie)).status, 201);
   const roster = (await api('state', undefined, other.cookie)).data.contacts;
   assert.ok(roster.some(item => item.access_name === 'Dev' && item.relationship === 'Doctor' && item.account && !item.revoked));
   assert.equal((await api('patients', undefined, helper.cookie)).data.patients.length, 2);
+  const firstSlot = '1'.repeat(24);
+  const secondSlot = '2'.repeat(24);
+  const tab1 = await api('login', { email: 'elder@example.com', password }, undefined, 'POST', undefined, undefined, firstSlot);
+  const tab2 = await api('login', { email: 'doctor@example.com', password }, undefined, 'POST', undefined, undefined, secondSlot);
+  const combined = tab1.cookie + '; ' + tab2.cookie;
+  assert.equal((await api('patients', undefined, combined, 'GET', undefined, undefined, firstSlot)).data.account.workspace, 'patient');
+  assert.equal((await api('patients', undefined, combined, 'GET', undefined, undefined, secondSlot)).data.account.workspace, 'doctor');
+  await api('logout', {}, combined, 'POST', undefined, undefined, firstSlot);
+  assert.equal((await api('patients', undefined, combined, 'GET', undefined, undefined, firstSlot)).status, 401);
+  assert.equal((await api('patients', undefined, combined, 'GET', undefined, undefined, secondSlot)).status, 200);
   const [{ id: doctor }] = (await api('state', undefined, owner.cookie)).data.doctors;
   const request = await api('appointment-requests', { name: 'Review appointment', doctor }, owner.cookie);
   assert.equal(request.status, 201);
@@ -255,6 +265,12 @@ test('passcodes, scoped access, reminder deduplication and handoff', async (cont
   const visitPath = 'appointment-requests/' + visit.data.id;
   const doctorApi = (path, body) => api(path, body, helper.cookie, body ? 'POST' : 'GET', undefined, otherPatient);
   const familyApi = (path, body) => api(path, body, unrelated.cookie, body ? 'POST' : 'GET', undefined, otherPatient);
+  const familyState = (await familyApi('state')).data;
+  assert.equal(familyState.me.canRequestAppointment, true);
+  assert.equal(familyState.doctors[0].id, primary);
+  const delegated = await familyApi('appointment-requests', { name: 'Requested by family', doctor: primary });
+  assert.equal(delegated.status, 201);
+  assert.ok((await api('patients', undefined, helper.cookie)).data.visits.some(item => item.id === delegated.data.id));
   const visitStart = Date.now();
   assert.equal((await doctorApi(visitPath + '/accept', { due: visitStart + 3_600_000 })).status, 200);
   assert.equal((await doctorApi('state')).data.requests.find(item => item.id === visit.data.id).questions, 'How should I prepare?');

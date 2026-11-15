@@ -32,38 +32,38 @@
         <p>See today’s doses and appointments, and let someone in your care circle know when a check-in may help.</p>
       </div>
       <div class="card auth-card">
+        <div class="auth-switch" aria-label="Account access">
+          <button class="quiet" type="button" data-auth="login-form" aria-pressed="true">Sign in</button>
+          <button class="quiet" type="button" data-auth="profile-form" aria-pressed="false">Patient signup</button>
+          <button class="quiet" type="button" data-auth="account-form" aria-pressed="false">Care-team signup</button>
+        </div>
         <form id="login-form">
           <h2>Sign in</h2>
           <label>Email<input name="email" type="email" required autocomplete="username"></label>
           <label>Password<input name="password" type="password" required maxlength="128" autocomplete="current-password"></label>
           <button class="primary">Sign in</button>
         </form>
-        <details>
-          <summary>Create a family, caregiver, or doctor account</summary>
-          <form id="account-form">
+          <form id="account-form" hidden>
+            <h2>Create a care-team account</h2>
             <label>Your name<input name="name" required maxlength="100" autocomplete="name"></label>
             <label>Email<input name="email" type="email" required autocomplete="username"></label>
             <label>Password <span>(12 or more characters)</span><input name="password" type="password" required minlength="12" maxlength="128" autocomplete="new-password"></label>
+            <label>Dashboard<select name="workspace"><option value="family">Family or caregiver</option><option value="doctor">Doctor</option></select></label>
             <button class="primary">Create my account</button>
           </form>
-        </details>
-        <details>
-          <summary>Create my patient account</summary>
-          <form id="profile-form">
+          <form id="profile-form" hidden>
+            <h2>Create a patient account</h2>
             <label>Name<input name="name" required maxlength="100" autocomplete="name"></label>
             <label>Email<input name="email" type="email" required autocomplete="username"></label>
             <label>Password <span>(12 or more characters)</span><input name="password" type="password" required minlength="12" maxlength="128" autocomplete="new-password"></label>
-            <label>Setup key <span>(if provided)</span><input name="setupKey" type="password" autocomplete="off"></label>
             <button class="primary">Create profile</button>
           </form>
-        </details>
-        <details>
-          <summary>Switch from a personal sign-in code</summary>
-          <form id="legacy-login-form">
+          <form id="legacy-login-form" hidden>
+            <h2>Switch to email sign-in</h2>
             <label>Previous personal sign-in code<input name="passcode" type="password" required autocomplete="off" spellcheck="false"></label>
             <button class="quiet">Continue to email setup</button>
           </form>
-        </details>
+        <button class="auth-legacy" type="button" data-auth="legacy-login-form" aria-pressed="false">Use an old personal sign-in code</button>
       </div>
     </section>
     <section id="login-setup" class="card auth-card" hidden>
@@ -83,7 +83,7 @@
         <details id="join-panel">
           <summary>Link a patient with an invite key</summary>
           <form id="join-form">
-            <label>Patient invite key<input name="key" required autocomplete="off" spellcheck="false"></label>
+            <label>Patient invite code<input name="key" required maxlength="36" autocomplete="off" spellcheck="false" placeholder="6 letters or numbers"></label>
             <p id="invite-preview" role="status" hidden></p>
             <label id="invite-relationship" hidden>Your relationship<select name="relationship">
               <option value="">Select relationship</option>
@@ -97,9 +97,12 @@
         </details>
       </div>
       <div id="patient-cards" class="patient-cards"></div>
+      <section class="workspace-panel" id="invitations-panel" hidden><h2>Invitations</h2><div id="invitations-list"></div></section>
+      <section class="workspace-panel" id="doctor-visits-panel" hidden><h2>Upcoming appointments and requests</h2><div id="doctor-visits-list"></div></section>
     </section>
     <section id="no-patients" class="card" hidden><p>To get started, get an invite key from a patient and link their profile above.</p></section>
     <section id="dashboard" hidden>
+      <button type="button" class="quiet back-patients" id="back-patients" hidden>← Back to patient list</button>
       <div id="alarm" class="alarm" hidden>
         <p id="alarm-message" role="alert"></p>
         <button id="silence-alarm" class="quiet" hidden>Silence alarm</button>
@@ -220,12 +223,12 @@
             <h2 class="contacts-heading">Contacts and invitations</h2>
             <div id="contact-list"></div>
             <form id="contact-form" class="stack">
-              <label>Name<input name="name" required maxlength="100"></label>
+              <label>Name <span>(for a shared code or contact)</span><input name="name" maxlength="100"></label>
               <label>Email<input name="email" type="email" maxlength="254"></label>
               <label>Phone <span>(optional)</span><input name="phone" type="tel" maxlength="25" placeholder="+91…"></label>
               <label class="check"><input name="alerts" type="checkbox" checked> Receive check-in and appointment alerts</label>
               <label class="check" id="invite-label"><input name="invite" type="checkbox" checked> Create a one-time patient invite key</label>
-              <label class="check" id="email-invite-label"><input name="emailInvite" type="checkbox"> Send the invitation by email</label>
+              <label class="check" id="email-invite-label"><input name="emailInvite" type="checkbox"> Send an in-app invitation to this email address</label>
               <div class="actions"><button class="primary">Add contact or invite</button><button type="button" class="quiet cancel" hidden>Cancel edit</button></div>
             </form>
           </section>
