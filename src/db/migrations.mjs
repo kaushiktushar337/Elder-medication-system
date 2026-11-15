@@ -14,5 +14,5 @@ export const migrations = [
   '0011_reminder_indexes.sql'
 ].map((file, index) => ({
   version: index + 1,
-  sql: readFileSync(new URL('../migrations/' + file, import.meta.url), 'utf8')
+  sql: readFileSync(new URL('../../migrations/' + file, import.meta.url), 'utf8')
 }));

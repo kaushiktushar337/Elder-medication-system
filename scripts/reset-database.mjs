@@ -1,4 +1,4 @@
-import { resetCarecircle } from './postgres.mjs';
+import { resetCarecircle } from '../src/db/postgres.mjs';
 
 const { DATABASE_URL, SUPABASE_DB_CA, SUPABASE_TLS_MODE } = process.env;
 if (!DATABASE_URL || process.argv[2] !== '--clear-carecircle') {

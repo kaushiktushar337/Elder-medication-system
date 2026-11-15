@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { database } from './database.mjs';
-import { remind } from '../src/reminders.ts';
+import { database } from '../src/db/sqlite.mjs';
+import { remind } from '../src/features/reminders.ts';
 
 if (process.argv[2] !== '--send') throw new Error('Pass --send to send one real test email.');
 const { BREVO_API_KEY, BREVO_TEST_EMAIL, APP_URL } = process.env;

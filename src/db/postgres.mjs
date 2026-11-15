@@ -22,6 +22,7 @@ function createPool(connectionString, ca, tlsMode = 'verify-full') {
     },
     max: 4,
     connectionTimeoutMillis: 10_000,
+    statement_timeout: 20_000,
     types: queryTypes
   });
   pool.on('error', error => console.error('Database connection failed', error.code || error.name));

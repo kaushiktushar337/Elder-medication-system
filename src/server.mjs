@@ -2,11 +2,11 @@ import { createServer } from 'node:http';
 import { mkdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import worker, { remind } from '../src/worker.ts';
-import { database } from './database.mjs';
+import worker, { remind } from './http/router.ts';
+import { database } from './db/sqlite.mjs';
 
 const hosted = process.env.RENDER === 'true';
-const port = Number(process.env.PORT || 3000);
+const port = Number(process.env.PORT ?? 3000);
 const path = process.env.DATABASE_PATH || '.local/carecircle.sqlite';
 const appUrl = process.env.APP_URL?.trim().replace(/\/$/, '');
 const backendUrl = process.env.RENDER_EXTERNAL_URL || 'http://localhost:' + port;
@@ -21,7 +21,7 @@ if (hosted) {
 }
 let DB;
 if (process.env.DATABASE_URL) {
-  const { postgres } = await import('./postgres.mjs');
+  const { postgres } = await import('./db/postgres.mjs');
   try {
     DB = await postgres(process.env.DATABASE_URL, process.env.SUPABASE_DB_CA, process.env.SUPABASE_TLS_MODE);
   } catch (error) {
@@ -42,10 +42,11 @@ const env = {
 };
 const assets = {
   '/': ['index.html', 'text/html; charset=utf-8'],
-  '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
-  '/language.js': ['language.js', 'text/javascript; charset=utf-8'],
+  '/js/app.js': ['js/app.js', 'text/javascript; charset=utf-8'],
+  '/js/language.js': ['js/language.js', 'text/javascript; charset=utf-8'],
+  '/js/i18n/hi.js': ['js/i18n/hi.js', 'text/javascript; charset=utf-8'],
   '/favicon.png': ['favicon.png', 'image/png'],
-  '/styles.css': ['styles.css', 'text/css; charset=utf-8']
+  '/css/styles.css': ['css/styles.css', 'text/css; charset=utf-8']
 };
 for (const clip of ['due', 'overdue', 'upcoming', 'complete', 'no-doses', 'appointment', 'no-appointments']) {
   assets['/voice/' + clip + '.wav'] = ['voice/' + clip + '.wav', 'audio/wav'];
@@ -119,8 +120,10 @@ async function tick() {
   finally { running = false; }
 }
 
+server.requestTimeout = 30_000;
+server.headersTimeout = 15_000;
 server.listen(port, hosted ? '0.0.0.0' : '127.0.0.1', () => {
-  console.log('CareCircle listening on port ' + port);
+  console.log('CareCircle listening on port ' + server.address().port);
   void tick();
   setInterval(tick, 60_000).unref();
 });

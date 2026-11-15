@@ -14,7 +14,8 @@ export async function hashPassword(password) {
 }
 
 export async function verifyPassword(password, stored) {
-  const [salt, expected] = (stored || '0'.repeat(32) + ':' + '0'.repeat(64)).split(':');
+  const validHash = typeof stored === 'string' && /^[a-f0-9]{32}:[a-f0-9]{64}$/.test(stored);
+  const [salt, expected] = (validHash ? stored : '0'.repeat(32) + ':' + '0'.repeat(64)).split(':');
   const match = timingSafeEqual(await digest(password, salt), Buffer.from(expected, 'hex'));
-  return Boolean(stored && match);
+  return validHash && match;
 }

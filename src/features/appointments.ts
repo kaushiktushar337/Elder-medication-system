@@ -1,4 +1,4 @@
-import { DAY, error, json, query, text, uuid } from './shared.ts';
+import { DAY, error, json, query, text, uuid } from '../core.ts';
 
 const linkedDoctor = (env, profile, doctor) => query(env, "SELECT id FROM members WHERE id = ? AND profile = ? AND relationship = 'Doctor' AND account IS NOT NULL AND revoked = 0", text(doctor), profile).first();
 
@@ -74,7 +74,7 @@ export async function appointments(env, { id, action, method, body, now, profile
   }
   if (member.relationship !== 'Doctor') return error('Send a request to the patient’s linked doctor.', 403);
   if (id && method === 'DELETE') {
-    const result = await query(env, 'DELETE FROM appointments WHERE id = ? AND profile = ?', id, profile).run();
+    const result = await query(env, 'DELETE FROM appointments WHERE id = ? AND profile = ? AND (doctor = ? OR doctor IS NULL)', id, profile, member.id).run();
     return result.meta.changes ? json({ ok: true }) : error('Appointment not found.', 404);
   }
   if ((!id && method === 'POST') || (id && method === 'PATCH')) {
@@ -83,7 +83,7 @@ export async function appointments(env, { id, action, method, body, now, profile
     const due = Number(body.due);
     if (!name || !futureVisit(due, now)) return error('Enter a title and a future appointment within one year.');
     if (id) {
-      const result = await query(env, 'UPDATE appointments SET name = ?, location = ?, due = ? WHERE id = ? AND profile = ?', name, location, due, id, profile).run();
+      const result = await query(env, 'UPDATE appointments SET name = ?, location = ?, due = ? WHERE id = ? AND profile = ? AND (doctor = ? OR doctor IS NULL)', name, location, due, id, profile, member.id).run();
       return result.meta.changes ? json({ ok: true }) : error('Appointment not found.', 404);
     }
     const appointment = uuid();

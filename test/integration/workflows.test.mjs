@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import worker, { remind } from '../src/worker.ts';
-import { database } from '../scripts/database.mjs';
-import { migrations } from '../scripts/migrations.mjs';
-import { materialize } from '../src/reminders.ts';
+import worker, { remind } from '../../src/http/router.ts';
+import { database } from '../../src/db/sqlite.mjs';
+import { migrations } from '../../src/db/migrations.mjs';
+import { materialize } from '../../src/features/reminders.ts';
 
 test('dose generation uses one statement and preserves the patient scope and repeat rules', async () => {
   const DB = database();
@@ -31,7 +31,7 @@ test('passcodes, scoped access, reminder deduplication and handoff', async (cont
   let DB;
   if (process.env.TEST_POSTGRES) {
     const { PGlite } = await import('@electric-sql/pglite');
-    const { postgresQueries } = await import('../scripts/postgres.mjs');
+    const { postgresQueries } = await import('../../src/db/postgres.mjs');
     const pg = new PGlite();
     context.after(() => pg.close());
     for (const { sql } of migrations) await pg.exec(sql);

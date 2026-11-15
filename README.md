@@ -4,10 +4,32 @@ CareCircle is a hackathon demo for older adults and their care circles. It combi
 
 ## Project structure
 
-- [public/](public/) contains the browser dashboards, Hindi translations, display preferences, and local audio clips. Vercel serves it and forwards same-origin API requests to Render.
-- [src/worker.ts](src/worker.ts) handles sign-in, patient access, and API routing. [src/appointments.ts](src/appointments.ts) handles appointment requests, scheduling, and visit follow-through.
-- [src/reminders.ts](src/reminders.ts) materializes scheduled doses and runs the reminder scheduler. It keys deliveries by event, reminder type, recipient, and channel to prevent duplicate sends on concurrent runs.
-- [migrations/](migrations/) defines the shared SQLite and PostgreSQL schema. [scripts/server.mjs](scripts/server.mjs) runs the API and scheduler.
+```text
+public/
+  index.html           Browser entry point
+  js/
+    app.js             Dashboard rendering and interactions
+    language.js        Language, text-size, and theme preferences
+    i18n/hi.js         Hindi interface translations
+  css/styles.css       Responsive layouts and themes
+  voice/               Bundled audio fallback
+src/
+  server.mjs           Node HTTP server and reminder timer
+  http/router.ts       Request validation, access checks, and API routing
+  auth/                Password hashing and session handling
+  features/            Appointments, reminders, and refill logic
+  db/                  SQLite/PostgreSQL adapters and migration loader
+  core.ts              Shared time constants and small API/query helpers
+migrations/            Ordered SQL schema changes
+scripts/               Database maintenance and deployment smoke checks
+test/
+  unit/                Password and refill calculation tests
+  integration/         HTTP, API workflows, permissions, and email delivery
+```
+
+Vercel serves `public/` and forwards same-origin API requests to Render. The Render process starts at [src/server.mjs](src/server.mjs). Database adapters load the ordered SQL files in [migrations/](migrations/) during startup.
+
+Authentication helpers live in `src/auth/`. Feature modules use the shared helpers in `src/core.ts` and receive a database adapter through their environment argument. The HTTP router checks patient access before invoking appointment handlers. Reminder deliveries are keyed by event, reminder type, recipient, and channel to prevent duplicate sends on concurrent runs.
 
 ## Run locally
 
@@ -91,6 +113,8 @@ To send one live reminder for a synthetic missed dose, configure `BREVO_API_KEY`
 
 ## Verify changes locally
 
-Run `npm test` with Node.js 24. The suite uses synthetic accounts and a test sender. It checks cross-patient access, single-use invitations, appointment changes, alternating and skipped doses, refill forecasts, concurrent reminder deduplication, and handoff escalation. It also checks that generating a three-day dose window takes one SQL statement.
+Run `npm test` with Node.js 24. The suite uses synthetic accounts and mocked notification delivery. It checks cross-patient access, single-use invitations, appointment changes, alternating and skipped doses, refill forecasts, concurrent reminder deduplication, and handoff escalation. It also checks that generating a three-day dose window takes one SQL statement.
+
+`npm run test:coverage` reports backend line, branch, and function coverage. The HTTP test starts an isolated server on an available local port with an in-memory database and checks security headers, request-size limits, session logout, and 24 concurrent dashboard reads. It requires permission to bind and connect to localhost. Provider tests mock Brevo success, rate limiting, rejection, server failures, and interrupted connections. Browser behavior and live provider delivery need separate checks.
 
 To run the API integration tests on embedded PostgreSQL, install `@electric-sql/pglite` temporarily with `npm install --no-save --package-lock=false @electric-sql/pglite` and set `TEST_POSTGRES=1` before running `npm test`.

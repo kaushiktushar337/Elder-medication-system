@@ -1,20 +1,14 @@
-import { materialize, remind } from './reminders.ts';
+import { hash, rateExceeded, sessionCookie, sessionToken, signIn } from '../auth/sessions.ts';
+import { materialize, remind } from '../features/reminders.ts';
 import { randomInt } from 'node:crypto';
-import { hashPassword, validPassword, verifyPassword } from './password.ts';
-import { refillForecast, refillLevels, remaining } from './refills.ts';
-import { appointments, appointmentRequests } from './appointments.ts';
-import { DAY, IST, MINUTE, error, grace, json, localDay, query, rows, text, token, uuid } from './shared.ts';
+import { hashPassword, validPassword, verifyPassword } from '../auth/password.ts';
+import { refillForecast, refillLevels, remaining } from '../features/refills.ts';
+import { appointments, appointmentRequests } from '../features/appointments.ts';
+import { DAY, IST, error, grace, json, localDay, query, rows, text, token, uuid } from '../core.ts';
 export { remind };
 
-const hash = async (value: string) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))), byte => byte.toString(16).padStart(2, '0')).join('');
 const validEmail = value => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 const emailOf = value => text(value, 254).toLowerCase();
-const cookieName = request => {
-  const slot = request.headers.get('x-care-slot');
-  return /^[a-f0-9]{24}$/.test(slot || '') ? 'care_session_' + slot : 'care_session';
-};
-const sessionCookie = (request, value, age) => cookieName(request) + '=' + value + '; Path=/api; HttpOnly; SameSite=Lax; Max-Age=' + age + (new URL(request.url).protocol === 'https:' ? '; Secure' : '');
-const sessionToken = request => request.headers.get('cookie')?.match(new RegExp('(?:^|;\\s*)' + cookieName(request) + '=([a-f0-9]{32})(?:;|$)'))?.[1];
 const inviteAlphabet = '23456789abcdefghjkmnpqrstuvwxyz';
 const shortCode = () => Array.from({ length: 6 }, () => inviteAlphabet[randomInt(inviteAlphabet.length)]).join('');
 const validRelationship = value => ['Family', 'Caregiver', 'Doctor', 'Other'].includes(value);
@@ -36,21 +30,6 @@ function medicationPattern(body, now) {
   return [start, end, interval, skip.length ? '|' + skip.join('|') + '|' : ''];
 }
 
-async function signIn(request, env, account, body, status = 200) {
-  const session = token();
-  const prior = sessionToken(request);
-  const changes = [query(env, 'INSERT INTO account_sessions VALUES (?, ?, ?)', await hash(session), account, Date.now() + 7 * DAY)];
-  if (prior) changes.push(query(env, 'DELETE FROM account_sessions WHERE token = ?', await hash(prior)));
-  await env.DB.batch(changes);
-  return json(body, status, { 'set-cookie': sessionCookie(request, session, 604800) });
-}
-
-async function rateExceeded(env, address, now, limit) {
-  const bucket = Math.floor(now / (15 * MINUTE));
-  const attempt = await query(env, 'INSERT INTO attempts VALUES (?, ?, 1) ON CONFLICT(address) DO UPDATE SET count = CASE WHEN attempts.bucket = excluded.bucket THEN attempts.count + 1 ELSE 1 END, bucket = excluded.bucket RETURNING count', address, bucket).first();
-  return attempt.count > limit;
-}
-
 async function respondToInvite(env, account, invite, decision, relationship, now) {
   try {
     const result = decision === 'decline'
@@ -69,6 +48,10 @@ async function route(request, env) {
   const [resource, id, action] = path;
   const method = request.method;
   const now = Date.now();
+  if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(method)) {
+    return json({ error: 'Method not allowed' }, 405, { allow: 'GET, POST, PATCH, DELETE' });
+  }
+  if (path.length > 3 || !resource || path.some(segment => !segment)) return error('Page not found.', 404);
   if (method !== 'GET') {
     const origin = request.headers.get('origin');
     if (origin && origin !== url.origin && origin !== env.APP_URL) return error('Origin denied', 403);

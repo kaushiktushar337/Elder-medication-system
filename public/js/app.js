@@ -84,8 +84,12 @@ async function api(path, method = 'GET', body) {
   const suffix = accountRoutes.includes(path.split('/')[0]) ? '' : '?patient=' + encodeURIComponent(activePatient);
   const response = await fetch('/api/' + path + suffix, {
     method,
+    signal: AbortSignal.timeout(90_000),
     headers: { ...(accountSlot && { 'X-Care-Slot': accountSlot }), ...(method !== 'GET' && { 'Content-Type': 'application/json' }) },
     ...(method !== 'GET' && { body: JSON.stringify(body ?? {}) })
+  }).catch(error => {
+    if (error.name === 'TimeoutError') throw new Error('The request timed out. Refresh to check its status before trying again.');
+    throw error;
   });
   if (method === 'GET' && path.endsWith('/photo') && response.ok && response.headers.get('content-type') === 'image/jpeg') return response.blob();
   if (!response.headers.get('content-type')?.includes('application/json')) {
@@ -604,7 +608,7 @@ function renderSchedule() {
     return '<article class="visit-entry">' + row(item.name, description, actions) + visitDetails(item) + '</article>';
   }).join(''));
   const standalone = state.appointments.filter(item => !state.requests.some(request => request.id === item.id));
-  show('appointment-list', standalone.map(item => row(item.name, tr('Scheduled') + ' · ' + dayTime(item.due) + (item.location ? ' · ' + item.location : ''), state.me.relationship === 'Doctor' && !item.status ? controls('appointments', item) : state.me.owner && item.due > now() ? button('change-visit', item.id, 'Request a change') : '')).join('') || (state.requests.length ? '' : empty(tr('No appointments scheduled.'))));
+  show('appointment-list', standalone.map(item => row(item.name, tr('Scheduled') + ' · ' + dayTime(item.due) + (item.location ? ' · ' + item.location : ''), state.me.relationship === 'Doctor' && !item.status && (!item.doctor || item.doctor === state.me.id) ? controls('appointments', item) : state.me.owner && item.due > now() ? button('change-visit', item.id, 'Request a change') : '')).join('') || (state.requests.length ? '' : empty(tr('No appointments scheduled.'))));
   show('week-plan', Array.from({ length: 7 }, (_, index) => {
     const day = state.start + index * dayLength;
     const schedule = state.medications.filter(item => {

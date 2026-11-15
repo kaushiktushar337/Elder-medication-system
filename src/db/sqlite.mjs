@@ -22,6 +22,7 @@ export function database(filename = ':memory:') {
     throw error;
   }
   return {
+    close: () => sqlite.close(),
     prepare(sql) {
       const query = sqlite.prepare(sql);
       return { bind: (...args) => ({

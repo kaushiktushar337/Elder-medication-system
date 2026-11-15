@@ -1,4 +1,4 @@
-import { checkPostgres } from './postgres.mjs';
+import { checkPostgres } from '../src/db/postgres.mjs';
 
 const { DATABASE_URL, SUPABASE_DB_CA, SUPABASE_TLS_MODE } = process.env;
 if (!DATABASE_URL) {
