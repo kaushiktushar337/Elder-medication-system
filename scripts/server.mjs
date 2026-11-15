@@ -43,6 +43,8 @@ const env = {
 const assets = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
+  '/language.js': ['language.js', 'text/javascript; charset=utf-8'],
+  '/favicon.png': ['favicon.png', 'image/png'],
   '/styles.css': ['styles.css', 'text/css; charset=utf-8']
 };
 for (const clip of ['due', 'overdue', 'upcoming', 'complete', 'no-doses', 'appointment', 'no-appointments']) {
@@ -81,9 +83,10 @@ const server = createServer(async (incoming, outgoing) => {
     }
     const chunks = [];
     let size = 0;
+    const bodyLimit = /^\/api\/medications\/[^/]+\/photo$/.test(url.pathname) ? 172_000 : 8192;
     for await (const chunk of incoming) {
       size += chunk.length;
-      if (size > 8192) {
+      if (size > bodyLimit) {
         outgoing.writeHead(413, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Request too large' }));
         return;
       }

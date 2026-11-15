@@ -21,6 +21,7 @@ test('passcodes, scoped access, reminder deduplication and handoff', async (cont
     await pg.exec(await readFile(new URL('../migrations/0007_refills_handoff.sql', import.meta.url), 'utf8'));
     await pg.exec(await readFile(new URL('../migrations/0008_appointment_followthrough.sql', import.meta.url), 'utf8'));
     await pg.exec(await readFile(new URL('../migrations/0009_workspaces.sql', import.meta.url), 'utf8'));
+    await pg.exec(await readFile(new URL('../migrations/0010_accessible_medication.sql', import.meta.url), 'utf8'));
     const wrap = db => ({ query: async (sql, args) => {
       const result = await db.query(sql, args);
       return { ...result, rowCount: result.affectedRows ?? result.rows.length };
@@ -36,7 +37,8 @@ test('passcodes, scoped access, reminder deduplication and handoff', async (cont
       method, headers: { ...(body && { 'content-type': 'application/json' }), ...(cookie && { cookie }), ...(origin && { origin }), ...(slot && { 'x-care-slot': slot }) },
       body: body && JSON.stringify(body)
     }), env);
-    return { status: response.status, data: await response.json(), cookie: response.headers.get('set-cookie')?.split(';')[0] };
+    const data = response.headers.get('content-type') === 'image/jpeg' ? Buffer.from(await response.arrayBuffer()) : await response.json();
+    return { status: response.status, data, cookie: response.headers.get('set-cookie')?.split(';')[0] };
   }
   const password = 'synthetic-password-123';
   const ownerSignup = await api('profiles', { name: 'Asha', email: 'elder@example.com', password });
@@ -118,6 +120,14 @@ test('passcodes, scoped access, reminder deduplication and handoff', async (cont
   const due = Date.now() + 10 * 60_000;
   const medication = await api('medications', { name: 'Demo tablet', amount: '1 tablet', time: '08:00' }, helper.cookie);
   assert.equal(medication.status, 201);
+  const photoPath = 'medications/' + medication.data.id + '/photo';
+  const jpeg = '/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD8qqKKKAP/2Q==';
+  assert.equal((await api(photoPath, { jpeg: 'notajpeg' }, owner.cookie)).status, 400);
+  assert.equal((await api(photoPath, { jpeg }, owner.cookie)).status, 200);
+  assert.equal((await api(photoPath, undefined, other.cookie)).status, 404);
+  assert.equal((await api(photoPath, undefined, helper.cookie)).data.toString('base64'), jpeg);
+  assert.equal((await api(photoPath, {}, owner.cookie, 'DELETE')).status, 200);
+  assert.equal((await api(photoPath, undefined, owner.cookie)).status, 404);
   const appointment = await api('appointments', { name: 'Check-in', due: due + 3_600_000 }, helper.cookie);
   assert.equal(appointment.status, 201);
   const inviteOnly = await api('contacts', { name: 'Invite only', invite: true }, owner.cookie);
@@ -277,9 +287,19 @@ test('passcodes, scoped access, reminder deduplication and handoff', async (cont
   assert.equal((await familyApi('state')).data.requests.some(item => item.id === visit.data.id), false);
   assert.equal((await doctorApi(visitPath + '/summary', { summary: 'Too early' })).status, 409);
   const alternate = visitStart + 7_200_000;
-  assert.equal((await api(visitPath + '/propose', { due: alternate }, other.cookie)).status, 200);
+  assert.equal((await api(visitPath + '/propose', { due: alternate }, other.cookie)).status, 400);
+  assert.equal((await api(visitPath + '/propose', { due: alternate, reason: 'I have another commitment.' }, other.cookie)).status, 200);
+  assert.equal((await doctorApi('state')).data.requests.find(item => item.id === visit.data.id).proposal_reason, 'I have another commitment.');
+  assert.equal((await api('state', undefined, other.cookie)).data.appointments.find(item => item.id === visit.data.id).due, visitStart + 3_600_000);
+  const directVisit = await doctorApi('appointments', { name: 'Direct visit', due: visitStart + 3_600_000 });
+  assert.equal(directVisit.status, 201);
+  assert.equal((await api('appointments/' + directVisit.data.id + '/request-change', { doctor: primary, due: alternate, reason: 'Availability changed.' }, other.cookie)).status, 200);
+  const afterConversion = (await api('state', undefined, other.cookie)).data;
+  assert.equal(afterConversion.appointments.filter(item => item.id === directVisit.data.id).length, 1);
+  assert.equal(afterConversion.appointments.find(item => item.id === directVisit.data.id).due, visitStart + 3_600_000);
+  assert.equal(afterConversion.requests.find(item => item.id === directVisit.data.id).proposal_reason, 'Availability changed.');
   await remind(env, visitStart, capture);
-  assert.equal(messages.filter(item => item.kind === 'appointment_change' && item.to === 'doctor@example.com').length, 1);
+  assert.equal(messages.filter(item => item.kind === 'appointment_change' && item.to === 'doctor@example.com').length, 2);
   assert.equal((await familyApi(visitPath + '/accept-proposal', { proposed: alternate })).status, 403);
   assert.equal((await doctorApi(visitPath + '/accept-proposal', { proposed: alternate - 60_000 })).status, 409);
   assert.equal((await doctorApi(visitPath + '/accept-proposal', { proposed: alternate })).status, 200);

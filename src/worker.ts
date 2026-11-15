@@ -87,7 +87,7 @@ async function route(request, env) {
   let body = {};
   if (method !== 'GET') {
     const raw = await request.text();
-    if (raw.length > 8192) return error('Request too large', 413);
+    if (raw.length > (resource === 'medications' && action === 'photo' ? 172_000 : 8192)) return error('Request too large', 413);
     try { body = JSON.parse(raw); } catch { return error('Invalid JSON'); }
     if (!body || typeof body !== 'object' || Array.isArray(body)) return error('Invalid request');
   }
@@ -269,9 +269,9 @@ async function route(request, env) {
     const start = localDay(now);
     const [person, medications, appointments, requests, doctors, doses, checkins, contacts, deliveries] = await Promise.all([
       query(env, 'SELECT name, email, demo FROM profiles WHERE id = ?', profile).first(),
-      rows(env, 'SELECT * FROM medications WHERE profile = ? AND active = 1 ORDER BY time', profile),
-      rows(env, `SELECT id, profile, name, location, due, CAST(NULL AS TEXT) AS status FROM appointments WHERE profile = ?
-        UNION ALL SELECT id, profile, name, location, due, status FROM appointment_requests WHERE profile = ? AND status = 'scheduled'
+      rows(env, 'SELECT m.*, p.revision AS photo_revision FROM medications m LEFT JOIN medication_photos p ON p.medication = m.id WHERE m.profile = ? AND m.active = 1 ORDER BY m.time', profile),
+      rows(env, `SELECT id, profile, name, location, due, doctor, CAST(NULL AS TEXT) AS status FROM appointments WHERE profile = ?
+        UNION ALL SELECT id, profile, name, location, due, doctor, status FROM appointment_requests WHERE profile = ? AND status = 'scheduled'
         ORDER BY due`, profile, profile),
       rows(env, `SELECT r.*, m.name AS doctor_name FROM appointment_requests r JOIN members m ON m.id = r.doctor
         WHERE r.profile = ? AND (? = 1 OR r.doctor = ?) ORDER BY r.requested_at DESC LIMIT 30`, profile, Number(owner), member.id),
@@ -316,8 +316,9 @@ async function route(request, env) {
         result = await query(env, "UPDATE appointment_requests SET questions = ? WHERE id = ? AND profile = ? AND (status = 'pending' OR (status = 'scheduled' AND due > ?))", text(body.questions, 1000), id, profile, now).run();
       } else {
         const proposed = Number(body.due);
-        if (!Number.isSafeInteger(proposed) || proposed <= now || proposed > now + 366 * DAY) return error('Choose a future alternate time.');
-        result = await query(env, "UPDATE appointment_requests SET proposed_due = ?, proposed_at = ?, proposal_state = 'pending' WHERE id = ? AND profile = ? AND status = 'scheduled' AND due > ? AND due <> ?", proposed, now, id, profile, now, proposed).run();
+        const reason = text(body.reason, 800);
+        if (!Number.isSafeInteger(proposed) || proposed <= now || proposed > now + 366 * DAY || !reason) return error('Enter a reason and choose when you are next available.');
+        result = await query(env, "UPDATE appointment_requests SET proposed_due = ?, proposed_at = ?, proposal_reason = ?, proposal_state = 'pending' WHERE id = ? AND profile = ? AND status = 'scheduled' AND due > ? AND due <> ?", proposed, now, reason, id, profile, now, proposed).run();
       }
       return result.meta.changes ? json({ ok: true }) : error('The visit is unavailable or that time is already scheduled.', 409);
     }
@@ -425,6 +426,28 @@ async function route(request, env) {
     }
   }
   if (resource === 'medications') {
+    if (id && action === 'photo') {
+      const medication = await query(env, 'SELECT id FROM medications WHERE id = ? AND profile = ? AND active = 1', id, profile).first();
+      if (!medication) return error('Medication not found.', 404);
+      if (method === 'GET') {
+        const photo = await query(env, 'SELECT jpeg FROM medication_photos WHERE medication = ?', id).first();
+        if (!photo) return error('Photo not found.', 404);
+        return new Response(Buffer.from(photo.jpeg, 'base64'), { headers: { 'content-type': 'image/jpeg', 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff' } });
+      }
+      if (method === 'DELETE') {
+        await query(env, 'DELETE FROM medication_photos WHERE medication = ?', id).run();
+        return json({ ok: true });
+      }
+      if (method === 'POST') {
+        const jpeg = body.jpeg;
+        if (typeof jpeg !== 'string' || jpeg.length > 170_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(jpeg)) return error('Choose a JPEG under 125 KB.');
+        const bytes = Buffer.from(jpeg, 'base64');
+        if (bytes.length < 20 || bytes.length > 125_000 || bytes[0] !== 255 || bytes[1] !== 216 || bytes[2] !== 255 || bytes.at(-2) !== 255 || bytes.at(-1) !== 217) return error('This photo is not a valid JPEG.');
+        await query(env, 'INSERT INTO medication_photos VALUES (?, ?, ?) ON CONFLICT(medication) DO UPDATE SET jpeg = excluded.jpeg, revision = excluded.revision', id, jpeg, uuid()).run();
+        return json({ ok: true });
+      }
+      return error('Photo action not found.', 404);
+    }
     if (id && ['PATCH', 'DELETE'].includes(method)) {
       const previous = await query(env, 'SELECT * FROM medications WHERE id = ? AND profile = ? AND active = 1', id, profile).first();
       if (!previous) return error('Schedule not found.', 404);
@@ -449,6 +472,23 @@ async function route(request, env) {
     }
   }
   if (resource === 'appointments') {
+    if (id && action === 'request-change' && method === 'POST') {
+      if (!owner) return error('Only the patient can request a time change.', 403);
+      const next = Number(body.due);
+      const reason = text(body.reason, 800);
+      if (!Number.isSafeInteger(next) || next <= now || next > now + 366 * DAY || !reason) return error('Enter a reason and choose when you are next available.');
+      const doctor = await query(env, "SELECT id FROM members WHERE id = ? AND profile = ? AND relationship = 'Doctor' AND account IS NOT NULL AND revoked = 0", text(body.doctor), profile).first();
+      if (!doctor) return error('Choose a linked doctor.');
+      const visit = await query(env, 'SELECT id FROM appointments WHERE id = ? AND profile = ? AND due > ? AND due <> ?', id, profile, now, next).first();
+      if (!visit) return error('That appointment or alternate time is unavailable.', 409);
+      await env.DB.batch([
+        query(env, `INSERT INTO appointment_requests (id, profile, doctor, name, requested_at, status, due, location, proposed_due, proposed_at, proposal_state, proposal_reason)
+          SELECT id, profile, ?, name, ?, 'scheduled', due, location, ?, ?, 'pending', ? FROM appointments
+          WHERE id = ? AND profile = ? AND due > ? AND due <> ? ON CONFLICT DO NOTHING`, doctor.id, now, next, now, reason, id, profile, now, next),
+        query(env, 'DELETE FROM appointments WHERE id = ? AND profile = ? AND EXISTS (SELECT 1 FROM appointment_requests WHERE id = ? AND profile = ?)', id, profile, id, profile)
+      ]);
+      return json({ ok: true });
+    }
     if (member.relationship !== 'Doctor') return error('Send a request to the patient’s linked doctor.', 403);
     if (id && method === 'DELETE') {
       const result = await query(env, 'DELETE FROM appointments WHERE id = ? AND profile = ?', id, profile).run();
@@ -464,7 +504,7 @@ async function route(request, env) {
         return result.meta.changes ? json({ ok: true }) : error('Appointment not found.', 404);
       }
       const appointment = uuid();
-      await query(env, 'INSERT INTO appointments VALUES (?, ?, ?, ?, ?)', appointment, profile, name, location, due).run();
+      await query(env, 'INSERT INTO appointments (id, profile, name, location, due, doctor) VALUES (?, ?, ?, ?, ?, ?)', appointment, profile, name, location, due, member.id).run();
       return json({ id: appointment }, 201);
     }
   }

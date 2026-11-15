@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f3f7f9">
   <title>CareCircle | Daily care</title>
+  <link rel="icon" href="/favicon.png" type="image/png">
   <link rel="stylesheet" href="/styles.css">
   <script type="module" src="/app.js"></script>
 </head>
@@ -12,36 +13,40 @@
   <a class="skip-link" href="#main">Skip to main content</a>
   <header class="topbar">
     <div class="topbar-inner">
-      <a class="brand" href="/" aria-label="CareCircle home"><span class="brand-icon" aria-hidden="true">✚</span> CareCircle</a>
+      <a class="brand" href="/" aria-label="CareCircle home"><img class="brand-icon" src="/favicon.png" width="38" height="38" alt=""> CareCircle</a>
       <nav id="navigation" aria-label="Main navigation" hidden>
-        <button data-view="today" aria-current="page">Today</button>
-        <button data-view="schedule">Schedule</button>
-        <button data-view="refills">Refills</button>
-        <button data-view="appointments">Appointments</button>
-        <button data-view="history">History</button>
+        <button data-view="today" data-i18n="Today" aria-current="page">Today</button>
+        <button data-view="schedule" data-i18n="Schedule">Schedule</button>
+        <button data-view="refills" data-i18n="Refills">Refills</button>
+        <button data-view="appointments" data-i18n="Appointments">Appointments</button>
+        <button data-view="history" data-i18n="History">History</button>
         <button data-view="circle" id="access-nav">People &amp; access</button>
       </nav>
-      <button id="logout" class="quiet" hidden>Sign out</button>
+      <div class="display-settings">
+        <select id="language" aria-label="Language / भाषा"><option value="en">English</option><option value="hi" lang="hi">हिन्दी</option></select>
+        <button id="large-text" class="quiet" aria-pressed="false">Larger text</button>
+        <button id="logout" class="quiet" data-i18n="Sign out" hidden>Sign out</button>
+      </div>
     </div>
   </header>
   <main id="main" tabindex="-1">
     <div id="notice" role="status" aria-live="polite"></div>
     <section id="auth" class="auth-layout" hidden>
       <div class="auth-intro">
-        <h1>Daily care, together.</h1>
+        <h1 data-i18n="Daily care, together.">Daily care, together.</h1>
         <p>See today’s doses and appointments, and let someone in your care circle know when a check-in may help.</p>
       </div>
       <div class="card auth-card">
         <div class="auth-switch" aria-label="Account access">
-          <button class="quiet" type="button" data-auth="login-form" aria-pressed="true">Sign in</button>
-          <button class="quiet" type="button" data-auth="profile-form" aria-pressed="false">Patient signup</button>
-          <button class="quiet" type="button" data-auth="account-form" aria-pressed="false">Care-team signup</button>
+          <button class="quiet" type="button" data-auth="login-form" data-i18n="Sign in" aria-pressed="true">Sign in</button>
+          <button class="quiet" type="button" data-auth="profile-form" data-i18n="Patient signup" aria-pressed="false">Patient signup</button>
+          <button class="quiet" type="button" data-auth="account-form" data-i18n="Care-team signup" aria-pressed="false">Care-team signup</button>
         </div>
         <form id="login-form">
-          <h2>Sign in</h2>
+          <h2 data-i18n="Sign in">Sign in</h2>
           <label>Email<input name="email" type="email" required autocomplete="username"></label>
           <label>Password<input name="password" type="password" required maxlength="128" autocomplete="current-password"></label>
-          <button class="primary">Sign in</button>
+          <button class="primary" data-i18n="Sign in">Sign in</button>
         </form>
           <form id="account-form" hidden>
             <h2>Create a care-team account</h2>
@@ -105,7 +110,7 @@
       <button type="button" class="quiet back-patients" id="back-patients" hidden>← Back to patient list</button>
       <div id="alarm" class="alarm" hidden>
         <p id="alarm-message" role="alert"></p>
-        <button id="silence-alarm" class="quiet" hidden>Silence alarm</button>
+        <button id="silence-alarm" class="quiet" data-i18n="Silence alarm" hidden>Silence alarm</button>
       </div>
       <section id="today" class="view">
         <div class="heading">
@@ -122,13 +127,13 @@
             <div id="next-dose"></div>
           </section>
           <section class="card appointment" aria-labelledby="appointment-heading">
-            <h2 id="appointment-heading">Next appointment</h2>
+            <h2 id="appointment-heading" data-i18n="Next appointment">Next appointment</h2>
             <div id="next-appointment"></div>
-            <button id="open-appointment" class="quiet" data-view="appointments">Open appointments</button>
+            <button id="open-appointment" class="quiet">Open appointments</button>
             <div id="today-request-status"></div>
           </section>
           <section class="card dose-card" aria-labelledby="doses-heading">
-            <h2 id="doses-heading">Today’s doses</h2>
+            <h2 id="doses-heading" data-i18n="Today’s doses">Today’s doses</h2>
             <div id="dose-progress" class="dose-progress" hidden>
               <label for="dose-meter" id="dose-count"></label>
               <progress id="dose-meter" max="1" value="0"></progress>
@@ -136,29 +141,29 @@
             <div id="today-doses"></div>
           </section>
           <section class="card followup-card" aria-labelledby="followup-heading">
-            <h2 id="followup-heading">Care follow-ups</h2>
-            <button id="request-checkin" class="primary" data-action="request-checkin" hidden>Please check in</button>
+            <h2 id="followup-heading" data-i18n="Care follow-ups">Care follow-ups</h2>
+            <button id="request-checkin" class="primary" data-action="request-checkin" data-i18n="Please check in" hidden>Please check in</button>
             <div id="followups"></div>
           </section>
         </div>
       </section>
       <section id="history" class="view" hidden>
-        <div class="heading"><h1>History</h1></div>
-        <section class="card"><h2>Recent doses</h2><div id="history-list"></div></section>
+        <div class="heading"><h1 data-i18n="History">History</h1></div>
+        <section class="card"><h2 data-i18n="Recent doses">Recent doses</h2><div id="history-list"></div></section>
         <details class="card history" id="appointment-report">
-          <summary>Seven-day appointment summary</summary>
+          <summary data-i18n="Seven-day appointment summary">Seven-day appointment summary</summary>
           <div id="report-content"></div>
-          <button id="print-report" class="quiet">Print summary</button>
+          <button id="print-report" class="quiet" data-i18n="Print summary">Print summary</button>
         </details>
       </section>
       <section id="schedule" class="view" hidden>
-        <div class="heading"><div><p class="eyebrow">Care plan</p><h1>Schedule</h1></div><p class="muted">Times are shown in India Standard Time.</p></div>
+        <div class="heading"><div><p class="eyebrow">Care plan</p><h1 data-i18n="Schedule">Schedule</h1></div><p class="muted">Times are shown in India Standard Time.</p></div>
         <div class="schedule-layout">
           <section class="card">
-            <h2>Medications</h2>
+            <h2 data-i18n="Medications">Medications</h2>
             <div id="medication-list"></div>
             <form id="medication-form" class="stack">
-              <label>Medication name<input name="name" id="medication-name" required maxlength="100" autocomplete="off" aria-describedby="medication-search-help"></label>
+              <label><span class="field-label" data-i18n="Medication name">Medication name</span><input name="name" id="medication-name" required maxlength="100" autocomplete="off" aria-describedby="medication-search-help"></label>
               <p id="medication-search-help" hidden>Search by generic name or type the name as prescribed.</p>
               <datalist id="medicine-suggestions">
                 <option value="Amlodipine"><option value="Amoxicillin"><option value="Apixaban">
@@ -173,8 +178,8 @@
                 <option value="Ramipril"><option value="Rosuvastatin"><option value="Sertraline">
                 <option value="Spironolactone"><option value="Telmisartan"><option value="Warfarin">
               </datalist>
-              <label>Amount as prescribed<input name="amount" required maxlength="100"></label>
-              <label>Dose time (IST)<input name="time" type="time" required></label>
+              <label><span class="field-label" data-i18n="Amount as prescribed">Amount as prescribed</span><input name="amount" required maxlength="100"></label>
+              <label><span class="field-label" data-i18n="Dose time (IST)">Dose time (IST)</span><input name="time" type="time" required></label>
               <div class="date-fields">
                 <label>Start date<input name="start" type="date"></label>
                 <label>End date <span>(optional)</span><input name="end" type="date"></label>
@@ -185,20 +190,20 @@
               <div class="actions"><button class="primary">Add medication</button><button type="button" class="quiet cancel" hidden>Cancel edit</button></div>
             </form>
           </section>
-          <section class="card schedule-preview"><h2>Next seven days</h2><div id="week-plan" class="week-plan"></div></section>
+          <section class="card schedule-preview"><h2 data-i18n="Next seven days">Next seven days</h2><div id="week-plan" class="week-plan"></div></section>
         </div>
       </section>
       <section id="appointments" class="view" hidden>
-        <div class="heading"><h1>Appointments</h1><p class="muted">Times are shown in India Standard Time.</p></div>
+        <div class="heading"><h1 data-i18n="Appointments">Appointments</h1><p class="muted">Times are shown in India Standard Time.</p></div>
           <section class="card">
-            <h2>Requests and scheduled visits</h2>
+            <h2 data-i18n="Requests and scheduled visits">Requests and scheduled visits</h2>
             <div id="appointment-requests"></div>
             <div id="appointment-list"></div>
             <form id="request-appointment-form" class="stack" hidden>
-              <label>Doctor<select name="doctor" id="doctor-picker" required></select></label>
-              <label>Appointment title<input name="name" required maxlength="100"></label>
+              <label><span class="field-label" data-i18n="Doctor">Doctor</span><select name="doctor" id="doctor-picker" required></select></label>
+              <label><span class="field-label" data-i18n="Appointment title">Appointment title</span><input name="name" required maxlength="100"></label>
               <label>Questions for your doctor <span>(optional)</span><textarea name="questions" maxlength="1000" rows="3"></textarea></label>
-              <button class="primary">Send request to doctor</button>
+              <button class="primary" data-i18n="Send request to doctor">Send request to doctor</button>
             </form>
             <p id="no-linked-doctors" hidden>Invite your doctor from People &amp; access before requesting an appointment.</p>
             <form id="appointment-form" class="stack">
@@ -210,7 +215,7 @@
           </section>
       </section>
       <section id="refills" class="view" hidden>
-        <div class="heading"><h1>Refills</h1></div>
+        <div class="heading"><h1 data-i18n="Refills">Refills</h1></div>
         <div id="refill-cards" class="refill-cards"></div>
       </section>
       <section id="circle" class="view" hidden>
@@ -251,6 +256,17 @@
       </section>
     </section>
   </main>
+  <dialog id="change-dialog" aria-labelledby="change-title">
+    <form id="change-form">
+      <h2 id="change-title" data-i18n="Request a change">Request a change</h2>
+      <p id="change-context"></p>
+      <p id="change-error" role="alert" hidden></p>
+      <label id="change-doctor-label" hidden><span class="field-label" data-i18n="Doctor">Doctor</span><select name="doctor" id="change-doctor"></select></label>
+      <label><span class="field-label" data-i18n="Reason for the change">Reason for the change</span><textarea name="reason" maxlength="800" rows="3" required></textarea></label>
+      <label><span class="field-label" data-i18n="When are you next available? (IST)">When are you next available? (IST)</span><input name="due" type="datetime-local" required></label>
+      <div class="actions"><button class="primary" data-i18n="Send change request">Send change request</button><button class="quiet" id="cancel-change" type="button">Cancel</button></div>
+    </form>
+  </dialog>
   <dialog id="passcode-dialog" aria-labelledby="passcode-title">
     <h2 id="passcode-title">Save this passcode</h2>
     <p id="passcode-context"></p>

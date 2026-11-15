@@ -40,7 +40,7 @@ export async function checkPostgres(connectionString, ca, tlsMode) {
 
 export async function resetCarecircle(connectionString, ca, tlsMode) {
   const pool = createPool(connectionString, ca, tlsMode);
-  const tables = ['profiles', 'members', 'accounts', 'sessions', 'account_sessions', 'attempts', 'contacts', 'medications', 'appointments', 'doses', 'deliveries', 'checkins', 'appointment_requests', 'refills', 'handoff_rules'];
+  const tables = ['profiles', 'members', 'accounts', 'sessions', 'account_sessions', 'attempts', 'contacts', 'medications', 'medication_photos', 'appointments', 'doses', 'deliveries', 'checkins', 'appointment_requests', 'refills', 'handoff_rules'];
   try {
     const client = await pool.connect();
     try {

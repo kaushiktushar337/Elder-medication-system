@@ -72,7 +72,9 @@ Care-team accounts open a patient overview. Red cards indicate overdue unconfirm
 
 In **Refills**, record the number of doses physically on hand and choose a threshold and reminder recipient. Confirmed doses decrease that count. The forecast uses the active schedule and skips excluded dates. When there is an upcoming shortage and the count reaches the threshold, the scheduler sends one email per recorded count. Update the count after each refill.
 
-In **Appointments**, patients can add questions for the assigned doctor and propose another time for an upcoming visit. The original time remains scheduled until the doctor accepts the proposal. The doctor can post a short summary after the scheduled time. Visit questions and summaries are visible to the patient and assigned doctor. **Schedule** shows who last saved a medication schedule and when it takes effect.
+In **Appointments**, patients can add questions for the assigned doctor or request a change for an upcoming visit. **Today** offers the same action when an appointment is coming up that day. Enter a reason and the next time you are available in IST. The original time remains scheduled until the doctor accepts. Visit questions, change reasons and summaries are visible to the patient and assigned doctor. **Schedule** shows who last saved a medication schedule and when it takes effect.
+
+Select **हिन्दी** or **Larger text** in the header to change the display on this browser. The Hindi setting covers the main navigation and common patient actions. Use **Schedule → Medication photo** to upload a picture of the medication packaging or label. CareCircle resizes it in the browser and shows it beside the next dose on Today. The photo is a visual reference for the saved schedule.
 
 **Read today aloud** uses a local English voice when one is available. Otherwise, it plays bundled English clips that describe due, overdue, or upcoming doses and whether an appointment is coming up. Exact medication names and times remain visible on Today. The fallback never sends care details to a speech service.
 

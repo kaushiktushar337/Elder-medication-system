@@ -1,11 +1,13 @@
+import { initPreferences, inHindi, locale, tr } from './language.js';
+
 const byId = id => document.getElementById(id);
 const timeOptions = { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit' };
-const time = value => new Intl.DateTimeFormat('en-IN', timeOptions).format(value);
-const date = value => new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'long', day: 'numeric', month: 'long' }).format(value);
+const time = value => new Intl.DateTimeFormat(locale(), timeOptions).format(value);
+const date = value => new Intl.DateTimeFormat(locale(), { timeZone: 'Asia/Kolkata', weekday: 'long', day: 'numeric', month: 'long' }).format(value);
 const dayTime = value => date(value) + ' · ' + time(value);
 const safe = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const empty = message => '<p>' + safe(message) + '</p>';
-const button = (action, id, label, kind = 'quiet') => '<button class="' + kind + '" data-action="' + action + '" data-id="' + safe(id) + '">' + label + '</button>';
+const button = (action, id, label, kind = 'quiet') => '<button class="' + kind + '" data-action="' + action + '" data-id="' + safe(id) + '">' + safe(tr(label)) + '</button>';
 const row = (name, detail, actions = '') => '<div class="row"><div><strong>' + safe(name) + '</strong><p>' + safe(detail) + '</p></div><div class="actions">' + actions + '</div></div>';
 let state;
 let activePatient = '';
@@ -44,6 +46,7 @@ readInviteFromLocation();
 window.addEventListener('hashchange', readInviteFromLocation);
 const sounded = new Set();
 const latestMarkup = new Map();
+const photoUrls = new Map();
 
 function show(id, markup) {
   const element = byId(id);
@@ -69,6 +72,7 @@ async function api(path, method = 'GET', body) {
     headers: { ...(accountSlot && { 'X-Care-Slot': accountSlot }), ...(method !== 'GET' && { 'Content-Type': 'application/json' }) },
     ...(method !== 'GET' && { body: JSON.stringify(body ?? {}) })
   });
+  if (method === 'GET' && path.endsWith('/photo') && response.ok && response.headers.get('content-type') === 'image/jpeg') return response.blob();
   if (!response.headers.get('content-type')?.includes('application/json')) {
     throw new Error('The care service may still be waking up. Try again in a moment.');
   }
@@ -83,6 +87,8 @@ async function api(path, method = 'GET', body) {
 function auth() {
   stopReading();
   stopAlarm();
+  clearPhotos();
+  byId('change-dialog').close();
   byId('join-form').reset();
   resetInviteReview();
   state = undefined;
@@ -93,7 +99,7 @@ function auth() {
   byId('login-setup').hidden = true;
   armed = false;
   sounded.clear();
-  byId('sound').textContent = 'Enable alarm sound';
+  byId('sound').textContent = tr('Enable alarm sound');
   byId('sound').setAttribute('aria-pressed', 'false');
   byId('auth').hidden = false;
   byId('dashboard').hidden = true;
@@ -128,6 +134,7 @@ function setView(view) {
     if (item.dataset.view === view) item.setAttribute('aria-current', 'page');
     else item.removeAttribute('aria-current');
   }
+  loadVisiblePhotos();
 }
 
 function refresh() {
@@ -136,8 +143,8 @@ function refresh() {
     careTeam = account.kind === 'care-team';
     const doctorDashboard = account.workspace === 'doctor';
     byId('access-nav').hidden = doctorDashboard;
-    byId('access-nav').textContent = careTeam ? 'Care Circle' : 'People & access';
-    byId('access-heading').textContent = careTeam ? 'Care Circle' : 'People & access';
+    byId('access-nav').textContent = tr(careTeam ? 'Care Circle' : 'People & access');
+    byId('access-heading').textContent = tr(careTeam ? 'Care Circle' : 'People & access');
     byId('auth').hidden = true;
     byId('logout').hidden = false;
     byId('patient-access').hidden = !careTeam || account.needsSetup;
@@ -194,12 +201,77 @@ function refresh() {
 const now = () => state.now + Date.now() - syncedAt;
 const grace = () => state.doseGrace || 5 * 60_000;
 const status = dose => dose.taken_at ? 'Taken' : now() >= dose.due + grace(dose) ? 'Unconfirmed' : now() >= dose.due ? 'Due' : 'Upcoming';
-const pill = label => '<span class="pill" data-status="' + safe(label) + '">' + safe(label) + '</span>';
+const pill = label => '<span class="pill" data-status="' + safe(label) + '">' + safe(tr(label)) + '</span>';
 const doseDetail = dose => dose.amount + ' · ' + time(dose.due);
 const dayLength = 86_400_000;
 const offset = 330 * 60_000;
 const isoDay = value => new Date(value + offset).toISOString().slice(0, 10);
 const todaysDoses = () => state.doses.filter(dose => dose.due >= state.start && dose.due < state.start + dayLength && !dose.demo);
+
+function photoMarkup(medication) {
+  if (!medication?.photo_revision) return '';
+  return '<img class="medication-photo" data-medication="' + safe(medication.id) + '" data-revision="' + safe(medication.photo_revision) + '" alt="' + safe(tr('Medication photo') + ' · ' + medication.name) + '" hidden>';
+}
+
+function clearPhotos() {
+  for (const entry of photoUrls.values()) if (entry.url) URL.revokeObjectURL(entry.url);
+  photoUrls.clear();
+  for (const image of document.querySelectorAll('[data-revision]')) {
+    image.removeAttribute('src');
+    delete image.dataset.loading;
+    image.hidden = true;
+  }
+}
+
+function loadVisiblePhotos() {
+  if (!state) return;
+  for (const img of byId(activeView)?.querySelectorAll('[data-revision]') ?? []) {
+    const { medication, revision } = img.dataset;
+    let entry = photoUrls.get(revision);
+    if (!entry) {
+      const patient = activePatient;
+      entry = {};
+      photoUrls.set(revision, entry);
+      entry.ready = api('medications/' + medication + '/photo').then(blob => {
+        if (activePatient !== patient || photoUrls.get(revision) !== entry) return '';
+        entry.url = URL.createObjectURL(blob);
+        return entry.url;
+      }).catch(() => '');
+    }
+    if (img.dataset.loading) continue;
+    img.dataset.loading = 'true';
+    void entry.ready.then(url => {
+      if (!url || !img.isConnected) return;
+      img.src = url;
+      img.hidden = false;
+    });
+  }
+}
+
+async function resizeMedicationPhoto(file) {
+  if (!file.type.startsWith('image/') || file.size > 12_000_000) throw new Error('Choose an image under 12 MB.');
+  const source = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    image.src = source;
+    await image.decode();
+    const scale = Math.min(1, 620 / Math.max(image.width, image.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(image.width * scale));
+    canvas.height = Math.max(1, Math.round(image.height * scale));
+    const context = canvas.getContext('2d', { alpha: false });
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    for (const quality of [.82, .65, .48]) {
+      const jpeg = canvas.toDataURL('image/jpeg', quality).split(',')[1];
+      if (jpeg && jpeg.length <= 166_000) return jpeg;
+    }
+    throw new Error('The compressed photo is still too large.');
+  } finally {
+    URL.revokeObjectURL(source);
+  }
+}
 
 function stopReading() {
   if (!speech) return;
@@ -211,7 +283,7 @@ function stopReading() {
   } else {
     window.speechSynthesis?.cancel();
   }
-  byId('read-today').textContent = 'Read today aloud';
+  byId('read-today').textContent = tr('Read today aloud');
 }
 
 async function playAudioOverview(doses, pending, appointment) {
@@ -224,8 +296,8 @@ async function playAudioOverview(doses, pending, appointment) {
   if (!pending.length) clips.push(doses.length ? 'complete' : 'no-doses');
   clips.push(appointment ? 'appointment' : 'no-appointments');
   speech = playback;
-  byId('read-today').textContent = 'Stop reading';
-  notice('Playing a short audio overview. Medication names and times are on Today.');
+  byId('read-today').textContent = tr('Stop reading');
+  notice(inHindi() ? 'छोटा अंग्रेज़ी ऑडियो चल रहा है। दवाओं के नाम और समय आज के पेज पर हैं।' : 'Playing a short audio overview. Medication names and times are on Today.');
   try {
     audio ??= new AudioContext();
     await audio.resume();
@@ -247,7 +319,7 @@ async function playAudioOverview(doses, pending, appointment) {
     playback.sources.at(-1).onended = () => {
       if (speech !== playback) return;
       speech = undefined;
-      byId('read-today').textContent = 'Read today aloud';
+      byId('read-today').textContent = tr('Read today aloud');
     };
   } catch {
     if (speech !== playback) return;
@@ -263,8 +335,9 @@ byId('read-today').addEventListener('click', () => {
   }
   if (!state) return;
   const synthesis = window.speechSynthesis;
-  const localVoices = synthesis?.getVoices().filter(voice => voice.localService && /^en\b/i.test(voice.lang)) ?? [];
-  const voice = localVoices.find(item => item.lang.toLowerCase() === 'en-in') ?? localVoices[0];
+  const preferred = inHindi() ? /^hi\b/i : /^en\b/i;
+  const localVoices = synthesis?.getVoices().filter(voice => voice.localService && preferred.test(voice.lang)) ?? [];
+  const voice = localVoices.find(item => item.lang.toLowerCase() === locale().toLowerCase()) ?? localVoices[0];
   const current = now();
   const doses = todaysDoses();
   const pending = doses.filter(dose => !dose.taken_at);
@@ -273,7 +346,12 @@ byId('read-today').addEventListener('click', () => {
     void playAudioOverview(doses, pending, appointment);
     return;
   }
-  const parts = [
+  const parts = inHindi() ? [
+    state.person.name + ' की आज की देखभाल।',
+    doses.length ? doses.length + ' में से ' + (doses.length - pending.length) + ' खुराकें ली गईं।' : 'आज कोई खुराक तय नहीं है।',
+    ...pending.map(dose => dose.name + ', ' + dose.amount + ', समय ' + time(dose.due) + '। ' + tr(status(dose)) + '।'),
+    appointment ? 'अगला अपॉइंटमेंट: ' + appointment.name + ', ' + date(appointment.due) + ', समय ' + time(appointment.due) + '।' : 'कोई आगामी अपॉइंटमेंट नहीं है।'
+  ] : [
     'Care plan for ' + state.person.name + '.',
     doses.length ? (doses.length - pending.length) + ' of ' + doses.length + ' doses marked taken today.' : 'No doses scheduled today.',
     ...pending.map(dose => dose.name + ', ' + dose.amount + ', scheduled for ' + time(dose.due) + '. ' + status(dose) + '.'),
@@ -286,13 +364,13 @@ byId('read-today').addEventListener('click', () => {
   const finish = () => {
     if (speech !== message) return false;
     speech = undefined;
-    byId('read-today').textContent = 'Read today aloud';
+    byId('read-today').textContent = tr('Read today aloud');
     return true;
   };
   message.onend = finish;
   message.onerror = () => { if (finish()) notice('Could not read the care plan aloud.', true); };
   speech = message;
-  byId('read-today').textContent = 'Stop reading';
+  byId('read-today').textContent = tr('Stop reading');
   notice();
   try { synthesis.speak(message); }
   catch { if (finish()) notice('Could not read the care plan aloud.', true); }
@@ -338,6 +416,11 @@ function renderReport(current) {
       : empty('No confirmed or unconfirmed dose records in this period.')));
 }
 
+function todayAppointment() {
+  const upcoming = state.appointments.find(item => item.due > now());
+  return upcoming?.due < state.start + dayLength ? upcoming : null;
+}
+
 function renderToday() {
   const current = now();
   const today = todaysDoses();
@@ -347,26 +430,31 @@ function renderToday() {
   const followups = state.doses.filter(dose => (!dose.taken_at && status(dose) === 'Unconfirmed') || dose.claimed_at).slice(-12).reverse();
   const taken = today.filter(dose => dose.taken_at).length;
   byId('dose-progress').hidden = today.length === 0;
-  byId('dose-count').textContent = taken + ' of ' + today.length + ' taken';
+  byId('dose-count').textContent = inHindi() ? today.length + ' में से ' + taken + ' खुराकें ली गईं' : taken + ' of ' + today.length + ' taken';
   byId('dose-meter').max = today.length || 1;
   byId('dose-meter').value = taken;
   byId('date').textContent = date(current);
-  byId('welcome').textContent = 'Today for ' + state.person.name;
-  byId('next-heading').textContent = due.length ? 'Dose due now' : 'Next dose';
+  byId('welcome').textContent = inHindi() ? state.person.name + ' की आज की देखभाल' : 'Today for ' + state.person.name;
+  byId('next-heading').textContent = tr(due.length ? 'Dose due now' : 'Next dose');
   byId('next-heading').parentElement.toggleAttribute('data-due', due.length > 0);
   show('next-dose', next
     ? '<p class="dose-time">' + safe(time(next.due)) + '</p><p class="metric">' + safe(next.name) + '</p>' + empty(next.amount)
+      + photoMarkup(state.medications.find(item => item.id === next.medication))
       + (due.length ? button('taken', next.id, 'Mark taken', 'primary hero-action') : '')
-    : '<p class="metric">' + (today.length > 0 && taken === today.length ? 'All doses recorded' : 'No upcoming doses today') + '</p>');
+    : '<p class="metric">' + tr(today.length > 0 && taken === today.length ? 'All doses recorded' : 'No upcoming doses today') + '</p>');
   show('next-appointment', appointment
     ? '<p class="appointment-date">' + safe(dayTime(appointment.due)) + '</p><p class="metric">' + safe(appointment.name) + '</p>' + (appointment.location ? empty(appointment.location) : '')
-    : empty('No upcoming appointments.'));
-  show('today-doses', today.map(dose => row(dose.name, doseDetail(dose), pill(status(dose)) + (!dose.taken_at && dose.due <= current && dose !== due[0] ? button('taken', dose.id, 'Mark taken', 'primary') : ''))).join('') || empty('Add a medication in Schedule.'));
+    : empty(tr('No upcoming appointments.')));
+  const sameDay = state.me.owner && todayAppointment();
+  const pendingChange = sameDay && state.requests.some(item => item.id === sameDay.id && item.proposal_state === 'pending');
+  byId('open-appointment').textContent = tr(sameDay ? pendingChange ? 'Review change request' : 'Request a change'
+    : state.me.canRequestAppointment ? 'Request an appointment' : 'Open appointments');
+  show('today-doses', today.map(dose => row(dose.name, doseDetail(dose), pill(status(dose)) + (!dose.taken_at && dose.due <= current && dose !== due[0] ? button('taken', dose.id, 'Mark taken', 'primary') : ''))).join('') || empty(tr('Add a medication in Schedule.')));
   byId('request-checkin').hidden = !state.me.owner || state.checkins.some(item => !item.completed_at);
-  show('followups', [...state.checkins.map(item => followupRow(item, true)), ...followups.map(dose => followupRow(dose))].join('') || empty('No follow-ups to show.'));
-  show('history-list', state.doses.filter(dose => dose.due <= now()).slice(-30).reverse().map(dose => row(dose.name, dayTime(dose.due) + (dose.taken_by ? ' · Recorded by ' + dose.taken_by : ''), pill(status(dose)) + (!today.includes(dose) && !dose.taken_at ? button('taken', dose.id, 'Mark taken') : ''))).join('') || empty('No dose history yet.'));
+  show('followups', [...state.checkins.map(item => followupRow(item, true)), ...followups.map(dose => followupRow(dose))].join('') || empty(tr('No follow-ups to show.')));
+  show('history-list', state.doses.filter(dose => dose.due <= now()).slice(-30).reverse().map(dose => row(dose.name, dayTime(dose.due) + (dose.taken_by ? ' · Recorded by ' + dose.taken_by : ''), pill(status(dose)) + (!today.includes(dose) && !dose.taken_at ? button('taken', dose.id, 'Mark taken') : ''))).join('') || empty(tr('No dose history yet.')));
   renderReport(current);
-  const alarmText = due.length ? 'Dose due: ' + due.map(dose => dose.name).join(', ') : '';
+  const alarmText = due.length ? (inHindi() ? 'खुराक का समय: ' : 'Dose due: ') + due.map(dose => dose.name).join(', ') : '';
   if (byId('alarm-message').textContent !== alarmText) byId('alarm-message').textContent = alarmText;
   byId('alarm').hidden = !state.me.owner || !due.length;
   if (!state.me.owner || !due.length) stopAlarm();
@@ -374,6 +462,7 @@ function renderToday() {
     due.forEach(dose => sounded.add(dose.id));
     startAlarm();
   }
+  if (activeView === 'today') loadVisiblePhotos();
 }
 
 const controls = (entity, item) => button('edit-' + entity, item.id, 'Edit') + button('delete-' + entity, item.id, entity === 'medications' ? 'Retire' : 'Remove');
@@ -436,8 +525,9 @@ function visitDetails(item) {
   if (item.proposal_state) {
     const decision = item.proposal_state === 'pending' ? (future ? 'Awaiting doctor’s reply' : 'Proposal expired') : item.proposal_state === 'accepted' ? 'Alternate time accepted' : 'Alternate time declined';
     parts.push(empty(decision + ' · ' + dayTime(item.proposed_due)));
+    if (item.proposal_reason) parts.push('<p class="visit-notes"><strong>' + safe(tr('Reason for the change')) + '</strong><br>' + safe(item.proposal_reason) + '</p>');
   }
-  if (patient && future) parts.push(visitForm(item, 'propose', '<label>Alternate date and time (IST)<input name="due" type="datetime-local" required></label>', 'Propose another time'));
+  if (patient && future) parts.push(button('change-visit', item.id, 'Request a change'));
   if (doctor && future && item.proposal_state === 'pending') {
     const key = item.id + '|' + item.proposed_due;
     parts.push('<div class="actions">' + button('accept-proposal', key, 'Accept alternate time', 'primary') + button('decline-proposal', key, 'Decline alternate time') + '</div>');
@@ -448,16 +538,21 @@ function visitDetails(item) {
 }
 
 function renderSchedule() {
-  show('medication-list', state.medications.map(item => row(item.name, item.amount + ' · ' + item.time + ' IST · ' + (item.interval_days === 1 ? 'Daily' : 'Every ' + item.interval_days + ' days')
-    + (item.updated_by ? ' · Updated by ' + item.updated_by + ' · Effective ' + dayTime(Math.max(item.effective, item.start_day || 0)) : ''), controls('medications', item))).join('') || empty('No medications yet.'));
+  show('medication-list', state.medications.map(item => '<article class="medication-entry">' + row(item.name, item.amount + ' · ' + item.time + ' IST · ' + (item.interval_days === 1 ? 'Daily' : 'Every ' + item.interval_days + ' days')
+    + (item.updated_by ? ' · Updated by ' + item.updated_by + ' · Effective ' + dayTime(Math.max(item.effective, item.start_day || 0)) : ''), controls('medications', item)) + photoMarkup(item)
+    + '<form class="photo-form" data-photo="' + safe(item.id) + '"><label>' + safe(tr('Medication photo')) + '<input type="file" name="photo" accept="image/jpeg,image/png,image/webp,image/avif,image/heic" required></label>'
+    + '<div class="actions"><button class="quiet">' + safe(tr('Add or replace photo')) + '</button>'
+    + (item.photo_revision ? '<button type="button" class="quiet" data-action="remove-photo" data-id="' + safe(item.id) + '">' + safe(tr('Remove photo')) + '</button>' : '') + '</div></form></article>').join('') || empty('No medications yet.'));
   const canRequest = state.me.canRequestAppointment ?? state.me.owner;
-  byId('open-appointment').textContent = canRequest ? 'Request an appointment' : 'Open appointments';
   byId('appointment-form').hidden = state.me.relationship !== 'Doctor';
   byId('request-appointment-form').hidden = !canRequest || !state.doctors.length;
   byId('no-linked-doctors').hidden = !canRequest || Boolean(state.doctors.length);
   byId('no-linked-doctors').textContent = state.me.owner ? 'Invite your doctor from People & access before requesting an appointment.' : 'Ask the patient to link their doctor before requesting an appointment.';
-  show('doctor-picker', '<option value="">Choose doctor</option>' + state.doctors.map(doctor => '<option value="' + safe(doctor.id) + '">' + safe(doctor.name) + '</option>').join(''));
-  show('today-request-status', state.me.owner ? state.requests.slice(0, 3).map(item => empty(item.name + ' · ' + (item.status === 'pending' ? 'Awaiting ' + item.doctor_name : item.status === 'scheduled' ? 'Scheduled for ' + dayTime(item.due) : item.status))).join('') : '');
+  show('doctor-picker', '<option value="">' + safe(tr('Choose doctor')) + '</option>' + state.doctors.map(doctor => '<option value="' + safe(doctor.id) + '">' + safe(doctor.name) + '</option>').join(''));
+  const todayVisit = todayAppointment();
+  const awaitingChange = todayVisit && state.requests.find(item => item.id === todayVisit.id && item.proposal_state === 'pending');
+  show('today-request-status', state.me.owner ? awaitingChange ? empty(tr('Change requested') + ' · ' + dayTime(awaitingChange.proposed_due))
+    : !todayVisit ? state.requests.filter(item => item.status === 'pending').slice(0, 2).map(item => empty(item.name + ' · Awaiting ' + item.doctor_name)).join('') : '' : '');
   show('appointment-requests', state.requests.map(item => {
     const description = item.doctor_name + ' · ' + (item.status === 'scheduled' ? dayTime(item.due) + (item.location ? ' · ' + item.location : '') : item.status === 'pending' ? 'Awaiting response' : item.status);
     let actions = item.status === 'pending' && state.me.owner ? button('cancel-request', item.id, 'Cancel request') : '';
@@ -465,7 +560,7 @@ function renderSchedule() {
     return '<article class="visit-entry">' + row(item.name, description, actions) + visitDetails(item) + '</article>';
   }).join(''));
   const standalone = state.appointments.filter(item => !state.requests.some(request => request.id === item.id));
-  show('appointment-list', standalone.map(item => row(item.name, dayTime(item.due) + (item.location ? ' · ' + item.location : ''), state.me.relationship === 'Doctor' && !item.status ? controls('appointments', item) : '')).join('') || (state.requests.length ? '' : empty('No appointments scheduled.')));
+  show('appointment-list', standalone.map(item => row(item.name, dayTime(item.due) + (item.location ? ' · ' + item.location : ''), state.me.relationship === 'Doctor' && !item.status ? controls('appointments', item) : state.me.owner && item.due > now() ? button('change-visit', item.id, 'Request a change') : '')).join('') || (state.requests.length ? '' : empty(tr('No appointments scheduled.'))));
   show('week-plan', Array.from({ length: 7 }, (_, index) => {
     const day = state.start + index * dayLength;
     const schedule = state.medications.filter(item => {
@@ -476,6 +571,7 @@ function renderSchedule() {
     });
     return '<section><h3>' + safe(date(day)) + '</h3>' + (schedule.map(item => empty(item.time + ' · ' + item.name + ' · ' + item.amount)).join('') || empty('No doses scheduled')) + '</section>';
   }).join(''));
+  loadVisiblePhotos();
 }
 
 function render() {
@@ -553,7 +649,7 @@ byId('sound').addEventListener('click', async () => {
     } catch { notice('Sound is unavailable. On-screen alerts are active.', true); }
   }
   byId('sound').setAttribute('aria-pressed', String(armed));
-  byId('sound').textContent = armed ? 'Alarm sound on' : 'Enable alarm sound';
+  byId('sound').textContent = tr(armed ? 'Alarm sound on' : 'Enable alarm sound');
 });
 
 function passcode(value, context, title = 'Save your sign-in code') {
@@ -644,6 +740,8 @@ byId('logout').addEventListener('click', event => perform(event.currentTarget, a
 function selectPatient(id) {
   stopReading();
   stopAlarm();
+  clearPhotos();
+  byId('change-dialog').close();
   activePatient = id;
   state = undefined;
   byId('dashboard').hidden = true;
@@ -653,6 +751,80 @@ function selectPatient(id) {
   byId('request-appointment-form').reset();
   activeView = 'today';
 }
+
+function openChangeForm(visit) {
+  if (!state.me.owner || !visit) return;
+  const form = byId('change-form');
+  const existing = state.requests.find(item => item.id === visit.id);
+  const chooseDoctor = !visit.status;
+  form.reset();
+  form.dataset.visit = visit.id;
+  form.dataset.resource = chooseDoctor ? 'appointments' : 'appointment-requests';
+  byId('change-error').hidden = true;
+  byId('change-context').textContent = visit.name + ' · ' + dayTime(visit.due);
+  byId('change-doctor-label').hidden = !chooseDoctor;
+  form.elements.doctor.required = chooseDoctor;
+  show('change-doctor', '<option value="">' + safe(tr('Choose doctor')) + '</option>' + state.doctors.map(person => '<option value="' + safe(person.id) + '">' + safe(person.name) + '</option>').join(''));
+  form.elements.doctor.value = state.doctors.some(person => person.id === visit.doctor) ? visit.doctor : state.doctors.length === 1 ? state.doctors[0].id : '';
+  form.elements.reason.value = existing?.proposal_state === 'pending' ? existing.proposal_reason : '';
+  form.elements.due.min = new Date(now() + offset + 60_000).toISOString().slice(0, 16);
+  form.elements.due.value = existing?.proposal_state === 'pending' ? new Date(existing.proposed_due + offset).toISOString().slice(0, 16) : '';
+  if (chooseDoctor && !state.doctors.length) {
+    notice('Link a doctor in People & access before requesting a change.', true);
+    return;
+  }
+  byId('change-dialog').showModal();
+}
+
+byId('cancel-change').addEventListener('click', () => byId('change-dialog').close());
+byId('open-appointment').addEventListener('click', () => {
+  if (!state) return;
+  const visit = state.me.owner && todayAppointment();
+  if (visit && !state.requests.some(item => item.id === visit.id && item.proposal_state === 'pending')) {
+    openChangeForm(visit);
+    return;
+  }
+  setView('appointments');
+  if (!visit && state.me.canRequestAppointment && !byId('request-appointment-form').hidden) {
+    byId('request-appointment-form').querySelector('select').focus();
+  }
+});
+byId('change-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submit = form.querySelector('.primary');
+  submit.disabled = true;
+  byId('change-error').hidden = true;
+  try {
+    const values = formValues(form);
+    values.due = Date.parse(values.due + '+05:30');
+    const action = form.dataset.resource === 'appointments' ? 'request-change' : 'propose';
+    await api(form.dataset.resource + '/' + form.dataset.visit + '/' + action, 'POST', values);
+    byId('change-dialog').close();
+    await refresh();
+    notice(tr('Change requested'));
+  } catch (error) {
+    byId('change-error').textContent = error.message;
+    byId('change-error').hidden = false;
+  } finally { submit.disabled = false; }
+});
+
+byId('medication-list').addEventListener('submit', event => {
+  const form = event.target.closest('[data-photo]');
+  if (!form) return;
+  event.preventDefault();
+  const patient = activePatient;
+  perform(form.querySelector('button'), async () => {
+    const file = form.elements.photo.files[0];
+    if (!file) return;
+    const jpeg = await resizeMedicationPhoto(file);
+    if (patient !== activePatient) return;
+    await api('medications/' + form.dataset.photo + '/photo', 'POST', { jpeg });
+    clearPhotos();
+    await refresh();
+    notice('Medication photo saved.');
+  });
+});
 
 byId('patient-access').addEventListener('click', event => {
   const patient = event.target.closest('[data-patient]');
@@ -768,6 +940,10 @@ document.addEventListener('click', event => {
   }
   const { action, id } = control.dataset;
   if (!action) return;
+  if (action === 'change-visit') {
+    openChangeForm(state.appointments.find(visit => visit.id === id));
+    return;
+  }
   if (action.startsWith('edit-')) {
     const entity = action.slice(5);
     const [formId] = Object.entries(forms).find(([, [key]]) => key === entity);
@@ -807,6 +983,9 @@ document.addEventListener('click', event => {
       await api('checkins', 'POST');
     } else if (action === 'disable-refill') {
       await api('refills/' + id, 'DELETE');
+    } else if (action === 'remove-photo') {
+      await api('medications/' + id + '/photo', 'DELETE');
+      clearPhotos();
     } else if (action.startsWith('checkin-')) {
       await api('checkins/' + id + '/' + action.slice(8), 'POST');
     } else if (action.endsWith('-request')) {
@@ -826,6 +1005,7 @@ document.addEventListener('click', event => {
       'checkin-complete': 'Check-in marked complete.',
       'request-checkin': 'Check-in requested.',
       'disable-refill': 'Refill tracking disabled.',
+      'remove-photo': 'Medication photo removed.',
       'cancel-request': 'Appointment request cancelled.',
       'decline-request': 'Appointment request declined.',
       'accept-proposal': 'Alternate appointment time accepted.',
@@ -836,6 +1016,15 @@ document.addEventListener('click', event => {
   });
 });
 
+initPreferences(() => {
+  stopReading();
+  byId('read-today').textContent = tr('Read today aloud');
+  byId('sound').textContent = tr(armed ? 'Alarm sound on' : 'Enable alarm sound');
+  if (state) render();
+  if (!byId('logout').hidden) sync();
+});
+byId('read-today').textContent = tr('Read today aloud');
+byId('sound').textContent = tr('Enable alarm sound');
 const sync = () => refresh().catch(error => { if (state) notice(error.message, true); });
 byId('print-report').addEventListener('click', () => window.print());
 setInterval(() => { if (state && !document.hidden) renderToday(); }, 1000);
