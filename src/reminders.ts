@@ -1,4 +1,4 @@
-import { DAY, MINUTE, grace, localDay, query, rows } from './worker.ts';
+import { DAY, IST, MINUTE, grace, localDay, query, rows } from './worker.ts';
 
 export async function materialize(env, now, profile = null) {
   const start = localDay(now);
@@ -8,8 +8,10 @@ export async function materialize(env, now, profile = null) {
       FROM (SELECT *, (CAST(substr(time, 1, 2) AS INTEGER) * 60 + CAST(substr(time, 4, 2) AS INTEGER)) * 60000 AS first_minute
             FROM medications WHERE active = 1 AND (CAST(? AS TEXT) IS NULL OR profile = ?)) AS schedule
       WHERE first_minute + CAST(? AS BIGINT) >= effective
+        AND (start_day IS NULL OR (start_day <= ? AND ((CAST(? AS BIGINT) - start_day) / 86400000) % interval_days = 0))
+        AND (end_day IS NULL OR end_day >= ?) AND skip_dates NOT LIKE ?
       ON CONFLICT(medication, due) DO UPDATE SET cancelled = 0, name = excluded.name, amount = excluded.amount
-      WHERE doses.cancelled = 1`, day, day, profile, profile, day).run();
+      WHERE doses.cancelled = 1`, day, day, profile, profile, day, day, day, day, '%|' + new Date(day + IST).toISOString().slice(0, 10) + '|%').run();
   }
 }
 
@@ -17,8 +19,28 @@ const titles = {
   upcoming: 'A medication reminder is coming up',
   unconfirmed: 'A care check-in may be needed',
   checkin: 'Someone in your care circle asked for a check-in',
+  appointment_request: 'A patient requested an appointment',
   appointment: 'An appointment is coming up'
 };
+
+export async function sendInviteEmail(env, recipient, key) {
+  if (!env.BREVO_API_KEY || !env.BREVO_FROM_EMAIL || !env.APP_URL) return 'unconfigured';
+  try {
+    const url = new URL('/', env.APP_URL);
+    url.hash = new URLSearchParams({ invite: key }).toString();
+    const result = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST', headers: { 'api-key': env.BREVO_API_KEY, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sender: { name: 'CareCircle', email: env.BREVO_FROM_EMAIL },
+        to: [{ email: recipient }],
+        subject: 'You have a CareCircle invitation',
+        textContent: 'Open the invitation and sign in to a care-team account using this email. You can then accept or decline the invitation. The link expires after seven days.\n\n' + url.href
+      }),
+      signal: AbortSignal.timeout(7000)
+    });
+    return result.ok ? 'accepted' : result.status >= 500 ? 'review' : 'failed';
+  } catch { return 'review'; }
+}
 
 async function deliver(env, message) {
   if (!env.BREVO_API_KEY) return { state: 'unconfigured' };
@@ -40,9 +62,13 @@ async function deliver(env, message) {
   }
 }
 
-async function recipients(env, profile, kind) {
+async function recipients(env, profile, kind, doctor = null) {
+  if (kind === 'appointment_request') {
+    const recipient = await query(env, "SELECT a.email FROM members m JOIN accounts a ON a.id = m.account WHERE m.id = ? AND m.profile = ? AND m.revoked = 0 AND m.relationship = 'Doctor'", doctor, profile).first();
+    return recipient?.email ? [{ to: recipient.email, channel: 'email' }] : [];
+  }
   const person = await query(env, 'SELECT email FROM profiles WHERE id = ?', profile).first();
-  const contacts = kind === 'upcoming' ? [] : await rows(env, 'SELECT email, phone FROM contacts WHERE profile = ? AND alerts = 1', profile);
+  const contacts = kind === 'upcoming' ? [] : await rows(env, 'SELECT c.email, c.phone FROM contacts c LEFT JOIN members m ON m.id = c.member WHERE c.profile = ? AND c.alerts = 1 AND m.declined_at IS NULL', profile);
   const email = new Set([kind === 'checkin' ? '' : person.email, ...contacts.map(contact => contact.email)].filter(Boolean));
   const sms = env.BREVO_SMS_SENDER && new Set(contacts.map(contact => contact.phone).filter(Boolean));
   return [...Array.from(email, to => ({ to, channel: 'email' })), ...(sms ? Array.from(sms, to => ({ to, channel: 'sms' })) : [])];
@@ -51,17 +77,19 @@ async function recipients(env, profile, kind) {
 export async function remind(env, now = Date.now(), send = message => deliver(env, message)) {
   await materialize(env, now);
   await query(env, "UPDATE deliveries SET state = 'review' WHERE state = 'sending' AND attempted <= ?", now - 5 * MINUTE).run();
-  const doses = await rows(env, 'SELECT id, profile, due, demo FROM doses WHERE cancelled = 0 AND taken_at IS NULL AND due BETWEEN ? AND ? ORDER BY due', now - 120 * MINUTE, now + 15 * MINUTE);
+  const doses = await rows(env, 'SELECT id, profile, due FROM doses WHERE demo = 0 AND cancelled = 0 AND taken_at IS NULL AND due BETWEEN ? AND ? ORDER BY due', now - 120 * MINUTE, now + 15 * MINUTE);
   const appointments = await rows(env, 'SELECT id, profile, due FROM appointments WHERE due > ? AND due <= ? ORDER BY due', now, now + DAY);
+  const requests = await rows(env, "SELECT id, profile, doctor, due, status FROM appointment_requests WHERE (status = 'pending' AND requested_at BETWEEN ? AND ?) OR (status = 'scheduled' AND due BETWEEN ? AND ?)", now - DAY, now, now, now + DAY);
   const checkins = await rows(env, 'SELECT id, profile FROM checkins WHERE claimed_at IS NULL AND completed_at IS NULL AND requested_at BETWEEN ? AND ?', now - 60 * MINUTE, now);
   const events = [
     ...checkins.map(checkin => ({ ...checkin, kind: 'checkin' })),
+    ...requests.map(item => ({ ...item, kind: item.status === 'pending' ? 'appointment_request' : 'appointment' })),
     ...doses.filter(dose => dose.due > now).map(dose => ({ ...dose, kind: 'upcoming' })),
-    ...doses.filter(dose => now >= dose.due + grace(env, dose.demo) && now < dose.due + grace(env, dose.demo) + 60 * MINUTE).map(dose => ({ ...dose, kind: 'unconfirmed' })),
+    ...doses.filter(dose => now >= dose.due + grace && now < dose.due + grace + 60 * MINUTE).map(dose => ({ ...dose, kind: 'unconfirmed' })),
     ...appointments.map(appointment => ({ ...appointment, kind: 'appointment' }))
   ];
   for (const event of events) {
-    for (const recipient of await recipients(env, event.profile, event.kind)) {
+    for (const recipient of await recipients(env, event.profile, event.kind, event.doctor)) {
       const id = event.kind === 'appointment' ? event.id + '-' + event.due : event.id;
       const keys = [id, event.kind, recipient.to, recipient.channel];
       const reserved = await query(env, `INSERT INTO deliveries VALUES (?, ?, ?, ?, ?, 'sending', ?, 1)
@@ -70,12 +98,14 @@ export async function remind(env, now = Date.now(), send = message => deliver(en
         WHERE deliveries.state IN ('retry', 'unconfigured') AND deliveries.attempts < 3 AND deliveries.attempted <= ?
         RETURNING attempts`, event.profile, ...keys, now, now - MINUTE).first();
       if (!reserved) continue;
-      const current = event.kind === 'appointment'
+      const current = event.doctor
+        ? await query(env, 'SELECT 1 FROM appointment_requests WHERE id = ? AND status = ?', event.id, event.status).first()
+        : event.kind === 'appointment'
         ? await query(env, 'SELECT 1 FROM appointments WHERE id = ? AND due = ?', event.id, event.due).first()
         : event.kind === 'checkin'
           ? await query(env, 'SELECT 1 FROM checkins WHERE id = ? AND claimed_at IS NULL AND completed_at IS NULL', event.id).first()
           : await query(env, 'SELECT 1 FROM doses WHERE id = ? AND cancelled = 0 AND taken_at IS NULL', event.id).first();
-      const active = current && (await recipients(env, event.profile, event.kind)).some(candidate => candidate.channel === recipient.channel && candidate.to === recipient.to);
+      const active = current && (await recipients(env, event.profile, event.kind, event.doctor)).some(candidate => candidate.channel === recipient.channel && candidate.to === recipient.to);
       let state = 'suppressed';
       if (active) {
         try { ({ state } = await send({ ...recipient, kind: event.kind })); } catch { state = 'review'; }

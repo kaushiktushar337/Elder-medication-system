@@ -32,20 +32,23 @@ The default `SUPABASE_TLS_MODE=verify-full` verifies the database server certifi
 | `PROFILE_SETUP_KEY` | Random secret shared privately with the team for creating demo profiles |
 | `BREVO_API_KEY` | Brevo API key |
 | `BREVO_FROM_EMAIL` | Verified Brevo sender email |
-| `DEMO_MINUTES` | `1` in the Blueprint. Clear to hide the demo control. |
 | `BREVO_SMS_SENDER` | Optional. Set only after verifying transactional SMS on your account and destination. |
 
 Render Free sleeps after 15 minutes of inactivity. Supabase preserves profile and schedule data while Render is asleep, but the reminder loop resumes only after the service wakes. Open the site before presenting and keep one care-circle session open during the live walkthrough. [Render free-tier limits](https://render.com/docs/free)
 
 ## Rehearse the demo
 
-1. Open the Vercel URL. Create a synthetic profile using the setup key and a team-controlled inbox. Save the owner passcode locally.
-2. In **Care Circle**, add a caregiver with an email and alert permission. Copy their individual passcode. Sign in with it from a private browser window or a second device.
+1. Open the Vercel URL. Select **Create my patient account** and use the setup key, a team-controlled email and a password of at least 12 characters. Sign out and sign in with that email and password to confirm the existing patient workspace returns.
+2. In **People & access**, add a contact with **Create a one-time patient invite key** checked. Copy the key from the dialog or select **Send the invitation by email**. In a separate browser session, sign in to a care-team account. Open the emailed link or choose **Link a patient with an invite key**. Review the invitation, select a relationship, and accept or decline. Emailed invites require the recipient's email and expire after seven days. On the patient side, **People who can see your schedule** lists accepted relationships.
 3. In **Schedule**, add a synthetic daily medication. Add an appointment within the next 24 hours to check real Brevo delivery. Verify the email in the inbox and check **Reminder activity** on the owner’s view. “Accepted by Brevo” means the provider accepted the send request.
-4. On the owner’s **Today** screen, enable sound and schedule a demo dose. The open page displays the alert and sounds in about 20 seconds. Leave the dose unconfirmed for one minute. The next server tick sends the check-in email, so allow up to another minute.
+4. On the owner’s **Today** screen, enable alarm sound. Set a regular medication to the next available minute in IST, using a synthetic medication for rehearsal. The open page shows the alert and repeats the alarm for up to 30 seconds. Use **Silence alarm** to stop the sound. An unconfirmed dose opens follow-up after 30 minutes. Use **Please check in** to rehearse the handoff immediately.
 5. In the caregiver session, tap **I’ll call**. Show the caregiver’s name in both sessions. Record **Mark taken** as the owner and show that the history retains both actions.
-6. Verify revocation from the owner’s view. For judge access, create a fresh synthetic profile and share only the intended passcodes. Create the profile shortly before submission so it is available for the walkthrough.
+6. Verify revocation from the owner’s view. A revoked patient disappears from the caregiver’s patient list. Existing users can select **Switch from a personal sign-in code** and set up an email and password for the same account. Previously issued caregiver invite keys remain eligible for one redemption.
 
 For an elder-initiated handoff, tap **Please check in** in Today. The request appears in the caregiver’s Today view, and the next scheduler run alerts opted-in contacts if it is still waiting for a caller. After claiming it, the caller or profile owner can mark the check-in complete. The same completion action is available on claimed dose follow-ups and leaves the dose’s confirmation status separate.
+
+On **Today**, use **Read today aloud** for a spoken overview of the selected patient's doses and next appointment. It uses an on-device English voice when the browser provides one. Expand **Seven-day appointment summary** for daily counts, dose details, and a print view.
+
+Care-team accounts open a patient overview. Red cards indicate overdue unconfirmed doses, and yellow cards indicate pending appointment requests. Select a card to open that patient's workspace. Patients can request an appointment with a linked doctor. The scheduler emails the assigned doctor, who can accept and enter a time in **Schedule**. That time will appear on the patient's dashboard. The medication form supports a start date, optional end date, an interval in days, and explicit skipped dates. **Next seven days** previews the resulting schedule.
 
 The test suite exercises the API with a test sender. To run it against an embedded PostgreSQL runtime, install `@electric-sql/pglite` temporarily with `npm install --no-save --package-lock=false @electric-sql/pglite` and set `TEST_POSTGRES=1` before running `npm test`.

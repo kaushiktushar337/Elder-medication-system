@@ -38,6 +38,34 @@ export async function checkPostgres(connectionString, ca, tlsMode) {
   }
 }
 
+export async function resetCarecircle(connectionString, ca, tlsMode) {
+  const pool = createPool(connectionString, ca, tlsMode);
+  const tables = ['profiles', 'members', 'accounts', 'sessions', 'account_sessions', 'attempts', 'contacts', 'medications', 'appointments', 'doses', 'deliveries', 'checkins', 'appointment_requests'];
+  try {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(471230156)');
+      const { rows } = await client.query("SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = 'carecircle'");
+      const existing = tables.filter(table => rows.some(row => row.tablename === table)).map(table => 'carecircle.' + table);
+      if (existing.length) await client.query('TRUNCATE ' + existing.join(', ') + ' RESTRICT');
+      for (const table of existing) {
+        const { rows: [result] } = await client.query('SELECT COUNT(*) AS remaining FROM ' + table);
+        if (Number(result.remaining) !== 0) throw new Error('CareCircle table was not cleared.');
+      }
+      await client.query('COMMIT');
+      return existing.length;
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  } finally {
+    await pool.end();
+  }
+}
+
 export async function postgres(connectionString, ca, tlsMode) {
   const pool = createPool(connectionString, ca, tlsMode);
   const initialized = new WeakSet();

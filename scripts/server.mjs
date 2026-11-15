@@ -29,7 +29,6 @@ if (process.env.DATABASE_URL) {
 const env = {
   ...process.env,
   APP_URL: appUrl || (!hosted ? backendUrl : undefined),
-  DEMO_MINUTES: process.env.DEMO_MINUTES ?? (!hosted ? '1' : ''),
   DB
 };
 const assets = {

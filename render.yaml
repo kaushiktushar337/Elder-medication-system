@@ -11,8 +11,6 @@ services:
         value: 24.20.0
       - key: DATABASE_URL
         sync: false
-      - key: DEMO_MINUTES
-        value: "1"
       - key: PROFILE_SETUP_KEY
         sync: false
       - key: BREVO_API_KEY
